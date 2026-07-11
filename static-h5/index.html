@@ -1,0 +1,368 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>西宁城北吾悦广场暑期3楼特别活动</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #f5f7fb;
+        --ink: #172033;
+        --muted: #697386;
+        --line: #d9e0ec;
+        --blue: #1264d8;
+        --green: #16804a;
+        --orange: #b85f00;
+        --red: #b42318;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+        background: var(--bg);
+        color: var(--ink);
+      }
+      .app { max-width: 980px; margin: 0 auto; padding: 18px 14px 48px; }
+      .app.admin-app { max-width: 1360px; padding: 18px 22px 56px; }
+      .topbar {
+        display: flex; justify-content: space-between; gap: 12px; align-items: center;
+        padding: 12px 0 16px;
+      }
+      h1 { font-size: 22px; margin: 0 0 4px; letter-spacing: 0; }
+      h2 { font-size: 18px; margin: 0; }
+      p { margin: 0; }
+      .muted { color: var(--muted); font-size: 13px; }
+      .nav { display: flex; gap: 8px; flex-wrap: wrap; }
+      a, button {
+        appearance: none; border: 1px solid var(--line); border-radius: 8px;
+        background: #fff; color: var(--ink); padding: 10px 12px; font-size: 15px;
+        text-decoration: none;
+      }
+      button.primary { background: var(--blue); color: #fff; border-color: var(--blue); }
+      button.green { background: var(--green); color: #fff; border-color: var(--green); }
+      button.orange { background: var(--orange); color: #fff; border-color: var(--orange); }
+      button:disabled { opacity: .55; }
+      .panel {
+        background: #fff; border: 1px solid var(--line); border-radius: 8px;
+        padding: 16px; margin: 0 0 14px; box-shadow: 0 8px 24px rgba(22, 31, 51, .05);
+      }
+      .section-title { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin-bottom: 14px; }
+      .section-title > div { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+      .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 12px; }
+      .col-12 { grid-column: span 12; }
+      .col-8 { grid-column: span 8; }
+      .col-6 { grid-column: span 6; }
+      .col-4 { grid-column: span 4; }
+      label { display: block; color: var(--muted); font-size: 13px; margin: 0 0 6px; }
+      input, select, textarea, .readonly {
+        width: 100%; min-height: 42px; border: 1px solid var(--line); border-radius: 8px;
+        padding: 9px 10px; font: inherit; background: #fff; color: var(--ink);
+      }
+      .readonly { background: #f8fafc; line-height: 1.55; }
+      .activity-list {
+        display: grid;
+        gap: 6px;
+        max-height: 190px;
+        overflow: auto;
+        padding: 8px;
+        align-content: start;
+      }
+      .activity-item {
+        padding: 8px 9px;
+        border: 1px solid #e3e9f3;
+        border-radius: 8px;
+        background: #fff;
+      }
+      .activity-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+      .activity-item strong { font-size: 13px; line-height: 1.25; }
+      .activity-item span { color: var(--muted); font-size: 11px; white-space: nowrap; }
+      .activity-item p { margin-top: 4px; color: var(--ink); font-size: 12px; line-height: 1.42; }
+      .alert { padding: 10px 12px; border-radius: 8px; background: #eef4ff; color: #174a94; margin-top: 12px; }
+      .alert.ok { background: #eaf7ef; color: #11613a; }
+      .alert.bad { background: #fff1f0; color: var(--red); }
+      .coupon {
+        border: 1px solid #cad6e8; border-radius: 10px; padding: 18px; background: #fbfdff;
+        text-align: center;
+      }
+      .coupon-name { font-size: 22px; font-weight: 800; margin-bottom: 8px; }
+      .code { font-size: 20px; font-weight: 800; letter-spacing: 1px; margin: 10px 0; }
+      .qr { width: 236px; height: 236px; max-width: 82vw; background: #fff; padding: 8px; border: 1px solid var(--line); border-radius: 8px; }
+      .scanner { width: 100%; max-width: 420px; min-height: 240px; margin: 10px auto; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: #0b1020; }
+      table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      th, td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); }
+      .table-wrap { width: 100%; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+      .table-wrap table { min-width: 860px; }
+      .table-wrap th {
+        position: sticky;
+        top: 0;
+        z-index: 1;
+        background: #f8fafc;
+        white-space: nowrap;
+      }
+      .table-wrap td { vertical-align: top; }
+      .table-wrap input, .table-wrap select, .table-wrap textarea { min-width: 116px; font-size: 12px; }
+      .table-wrap textarea { min-width: 240px; resize: vertical; }
+      .admin-workspace { display: grid; gap: 18px; }
+      .admin-hero {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 16px;
+        align-items: center;
+        padding: 16px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+        box-shadow: 0 8px 22px rgba(22, 31, 51, .045);
+      }
+      .admin-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+      .metric-row, .admin-metrics { display: flex; gap: 10px; flex-wrap: wrap; }
+      .metric-card {
+        min-width: 112px;
+        padding: 9px 11px;
+        border: 1px solid #e3e9f3;
+        border-radius: 8px;
+        background: #f8fafc;
+      }
+      .metric-card span { display: block; color: var(--muted); font-size: 12px; }
+      .metric-card strong { display: block; margin-top: 2px; font-size: 20px; line-height: 1; }
+      .admin-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        align-items: start;
+      }
+      .admin-grid > .admin-panel:first-child { grid-column: 1 / -1; }
+      .admin-full { min-width: 0; }
+      .admin-panel {
+        background: #fff;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 18px;
+        box-shadow: 0 8px 22px rgba(22, 31, 51, .045);
+      }
+      .admin-panel h2 { font-size: 16px; }
+      .admin-panel.compact .table-wrap { max-height: none; }
+      .admin-panel.compact table { min-width: 100%; table-layout: fixed; }
+      .admin-panel.compact input, .admin-panel.compact select { min-width: 0; }
+      .admin-panel.merchants .table-wrap { max-height: 520px; }
+      .admin-panel.coupons .table-wrap { max-height: 460px; }
+      .admin-panel.merchants table { min-width: 1280px; }
+      .admin-panel.coupons table { min-width: 1040px; }
+      .admin-data-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 18px;
+        align-items: start;
+      }
+      .admin-data-grid .admin-panel { min-width: 0; }
+      .admin-data-grid .table-wrap { max-height: 420px; }
+      .admin-panel .grid { gap: 10px; }
+      .admin-panel label { font-size: 12px; }
+      .admin-panel button { padding: 8px 10px; font-size: 13px; }
+      .home-shell {
+        min-height: 100vh;
+        background:
+          linear-gradient(180deg, rgba(255,255,255,.12), rgba(245,247,251,1) 78%),
+          url("./assets/summer-pass-poster-bg.webp") center top / cover no-repeat;
+        margin: -18px -14px -48px;
+        padding: 18px 14px 42px;
+      }
+      .poster {
+        position: relative;
+        max-width: 720px;
+        min-height: 860px;
+        margin: 0 auto;
+        padding: 22px 18px 28px;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-end;
+      }
+      .poster::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          linear-gradient(180deg, rgba(255,255,255,.04) 0%, rgba(255,255,255,.18) 34%, rgba(255,255,255,.92) 58%, rgba(255,255,255,.98) 100%);
+        pointer-events: none;
+      }
+      .poster-content { position: relative; z-index: 1; }
+      .poster-badge {
+        display: inline-flex;
+        align-items: center;
+        min-height: 34px;
+        padding: 7px 12px;
+        border-radius: 999px;
+        background: #fff;
+        color: #0f766e;
+        font-weight: 800;
+        font-size: 13px;
+        box-shadow: 0 8px 22px rgba(16, 132, 117, .14);
+      }
+      .poster-title {
+        margin: 12px 0 8px;
+        font-size: 36px;
+        line-height: 1.08;
+        font-weight: 900;
+        color: #102033;
+      }
+      .poster-subtitle {
+        max-width: 620px;
+        color: #40516b;
+        font-size: 16px;
+        line-height: 1.55;
+      }
+      .price-band {
+        margin: 18px 0 14px;
+        display: grid;
+        grid-template-columns: 1.2fr .8fr;
+        gap: 12px;
+        align-items: stretch;
+      }
+      .price-card, .rule-card, .project-card, .ops-card {
+        background: rgba(255,255,255,.9);
+        border: 1px solid rgba(255,255,255,.72);
+        border-radius: 8px;
+        box-shadow: 0 14px 36px rgba(31, 80, 105, .12);
+        backdrop-filter: blur(10px);
+      }
+      .price-card { padding: 16px; }
+      .price-label { color: #0f766e; font-weight: 800; font-size: 14px; }
+      .price-main { display: flex; align-items: baseline; gap: 8px; margin-top: 4px; }
+      .price-now { color: #f05a28; font-size: 48px; line-height: 1; font-weight: 900; }
+      .price-yuan { color: #f05a28; font-size: 20px; font-weight: 900; }
+      .price-old { color: #78869a; text-decoration: line-through; font-size: 15px; }
+      .rule-card { padding: 16px; color: #40516b; line-height: 1.55; font-size: 14px; }
+      .project-grid {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 10px;
+        margin-top: 10px;
+      }
+      .project-card { padding: 12px; min-height: 128px; }
+      .project-tag {
+        width: 30px;
+        height: 30px;
+        display: grid;
+        place-items: center;
+        border-radius: 50%;
+        background: #10b981;
+        color: #fff;
+        font-weight: 900;
+        margin-bottom: 8px;
+      }
+      .project-card:nth-child(2) .project-tag { background: #f59e0b; }
+      .project-card:nth-child(3) .project-tag { background: #3b82f6; }
+      .project-card:nth-child(4) .project-tag { background: #ef4444; }
+      .project-card:nth-child(5) .project-tag { background: #8b5cf6; }
+      .project-name { font-weight: 900; margin-bottom: 5px; color: #102033; }
+      .project-desc { color: #50627a; font-size: 12px; line-height: 1.5; }
+      .home-benefit-track {
+        display: flex;
+        gap: 12px;
+        margin-top: 18px;
+        padding: 2px 2px 12px;
+        overflow-x: auto;
+        scroll-snap-type: x mandatory;
+        -webkit-overflow-scrolling: touch;
+      }
+      .home-benefit-track::-webkit-scrollbar { height: 6px; }
+      .home-benefit-track::-webkit-scrollbar-track {
+        background: rgba(255,255,255,.5);
+        border-radius: 999px;
+      }
+      .home-benefit-track::-webkit-scrollbar-thumb {
+        background: rgba(15, 118, 110, .42);
+        border-radius: 999px;
+      }
+      .home-benefit-group {
+        flex: 0 0 min(86%, 520px);
+        scroll-snap-align: start;
+        background: rgba(255,255,255,.92);
+        border: 1px solid rgba(255,255,255,.74);
+        border-radius: 8px;
+        padding: 12px;
+        box-shadow: 0 12px 30px rgba(31, 80, 105, .1);
+      }
+      .home-benefit-group:nth-child(2) .home-benefit-title { color: #b85f00; }
+      .home-benefit-group:nth-child(3) .home-benefit-title { color: #1264d8; }
+      .home-benefit-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        margin-bottom: 8px;
+      }
+      .home-benefit-title {
+        font-weight: 900;
+        color: #0f766e;
+      }
+      .home-benefit-hint {
+        flex: 0 0 auto;
+        color: #697386;
+        font-size: 11px;
+        padding: 3px 8px;
+        border-radius: 999px;
+        background: #f2f6fb;
+      }
+      .home-benefit-list {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 8px;
+        max-height: 310px;
+        overflow: auto;
+      }
+      .home-benefit-list .activity-item {
+        box-shadow: none;
+        border-color: #e6edf6;
+      }
+      .poster-note { margin-top: 12px; color: #50627a; line-height: 1.55; font-size: 13px; }
+      .standalone-pass {
+        max-width: 720px;
+        margin: 14px auto 0;
+        padding: 16px;
+        border-radius: 8px;
+        background: rgba(255,255,255,.94);
+        border: 1px solid var(--line);
+        box-shadow: 0 12px 30px rgba(31, 80, 105, .1);
+        overflow: hidden;
+      }
+      .standalone-pass img {
+        display: block;
+        width: 100%;
+        border-radius: 8px;
+        border: 1px solid #e3e9f3;
+      }
+      .ops-card { max-width: 720px; margin: 14px auto 0; padding: 14px; }
+      .ops-card .nav { justify-content: center; }
+      .ops-card a { background: #fff; }
+      @media (max-width: 760px) {
+        .topbar { align-items: flex-start; flex-direction: column; }
+        .grid { display: block; }
+        .grid > div { margin-bottom: 12px; }
+        h1 { font-size: 20px; }
+        button, a { min-height: 42px; }
+        .app.admin-app { padding: 12px 10px 42px; }
+        .admin-hero { position: static; grid-template-columns: 1fr; }
+        .admin-actions { justify-content: stretch; }
+        .admin-actions button { flex: 1 1 46%; }
+        .admin-grid { grid-template-columns: 1fr; }
+        .admin-data-grid { grid-template-columns: 1fr; }
+        .metric-card { flex: 1 1 30%; min-width: 96px; }
+        .table-wrap { max-height: 420px; }
+        .poster { min-height: 820px; padding: 20px 10px 24px; }
+        .poster-title { font-size: 31px; }
+        .poster-subtitle { font-size: 14px; }
+        .price-band { grid-template-columns: 1fr; }
+        .project-grid { grid-template-columns: 1fr; }
+        .home-benefit-group { flex-basis: 88%; }
+        .home-benefit-list { grid-template-columns: 1fr; max-height: 360px; }
+        .project-card { min-height: auto; }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root" class="app"></div>
+    <script src="./app.js"></script>
+  </body>
+</html>

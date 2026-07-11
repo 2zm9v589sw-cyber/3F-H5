@@ -1,0 +1,6 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "xining-chengbei-wuyue-3f",
+  "compatibility_date": "2026-07-11",
+  "pages_build_output_dir": "static-h5"
+}

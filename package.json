@@ -1,0 +1,27 @@
+{
+  "name": "xining-cb-3f-coupon-cloud",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "build:h5": "pnpm dlx esbuild static-h5/app-src.js --bundle --format=iife --outfile=static-h5/app.js --minify",
+    "deploy:cloudflare": "pnpm build:h5 && pnpm dlx wrangler pages deploy static-h5 --project-name xining-chengbei-wuyue-3f --branch main"
+  },
+  "dependencies": {
+    "jsqr": "^1.4.0",
+    "next": "16.2.10",
+    "qrcode": "1.5.4",
+    "react": "19.2.7",
+    "react-dom": "19.2.7"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.7",
+    "@types/qrcode": "1.5.5",
+    "@types/react": "19.0.7",
+    "@types/react-dom": "19.0.3",
+    "typescript": "5.7.3"
+  }
+}
