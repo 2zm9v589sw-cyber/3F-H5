@@ -8,3 +8,10 @@ node_modules
 *.log
 .env*
 部署完成信息.md
+edgeone-dist
+
+# Tencent Cloud EdgeOne
+.env
+.edgeone/*
+.tef_dist/*
+  
