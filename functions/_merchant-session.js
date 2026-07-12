@@ -1,0 +1,73 @@
+const encoder = new TextEncoder();
+const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
+
+function bytesToBase64Url(bytes) {
+  let binary = "";
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function stringToBase64Url(value) {
+  return bytesToBase64Url(encoder.encode(value));
+}
+
+function base64UrlToString(value) {
+  const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = normalized + "=".repeat((4 - normalized.length % 4) % 4);
+  const bytes = Uint8Array.from(atob(padded), (char) => char.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
+}
+
+async function digest(value) {
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", encoder.encode(value)));
+}
+
+async function hmac(secret, value) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    encoder.encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+  return new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(value)));
+}
+
+export function merchantSecret(env) {
+  return env.MERCHANT_AUTH_SECRET || env.MERCHANT_PASSWORD || "";
+}
+
+export async function merchantAccessCode(env, merchant) {
+  const secret = merchantSecret(env);
+  if (!secret) throw new Error("商户鉴权密钥未配置。");
+  const bytes = await digest(`${secret}:${merchant.id}:${merchant.shop_code || ""}`);
+  return Array.from(bytes.slice(0, 8), (byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("");
+}
+
+export async function createMerchantToken(env, merchantId) {
+  const secret = merchantSecret(env);
+  const payload = stringToBase64Url(JSON.stringify({
+    merchantId,
+    exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60
+  }));
+  const signature = bytesToBase64Url(await hmac(secret, payload));
+  return `${payload}.${signature}`;
+}
+
+export async function verifyMerchantToken(env, token) {
+  const secret = merchantSecret(env);
+  if (!secret || !token || !token.includes(".")) throw new Error("商户登录已失效，请重新登录。");
+  const [payload, suppliedSignature] = token.split(".");
+  const expectedSignature = bytesToBase64Url(await hmac(secret, payload));
+  if (suppliedSignature !== expectedSignature) throw new Error("商户登录已失效，请重新登录。");
+  const parsed = JSON.parse(base64UrlToString(payload));
+  if (!parsed.merchantId || Number(parsed.exp || 0) < Math.floor(Date.now() / 1000)) {
+    throw new Error("商户登录已过期，请重新登录。");
+  }
+  return parsed;
+}
+
+export function bearerToken(request) {
+  const authorization = request.headers.get("Authorization") || "";
+  return authorization.startsWith("Bearer ") ? authorization.slice(7).trim() : "";
+}

@@ -1,4 +1,6 @@
 import { ACTIVITY_CONTENT_PREFIX, json, parseActivityContents, readBody, supabase } from "../_shared.js";
+import { merchantAccessCode } from "../_merchant-session.js";
+import { parseReceiptNote, signedReceiptUrl } from "../_receipt.js";
 
 function assertAdmin(env, password) {
   if (!env.ADMIN_PASSWORD || password !== env.ADMIN_PASSWORD) {
@@ -40,12 +42,25 @@ async function loadConfig(env) {
     supabase(env, "coupons?select=*&order=issued_at.desc")
   ]);
   const setting = settings[0];
+  const merchantsWithContent = mergeActivityContents(merchants, setting);
   return {
     setting,
-    merchants: mergeActivityContents(merchants, setting),
+    merchants: await Promise.all(merchantsWithContent.map(async (merchant) => ({
+      ...merchant,
+      access_code: await merchantAccessCode(env, merchant)
+    }))),
     couponTypes,
     thresholdRules,
-    coupons: coupons.map((coupon) => ({ ...coupon, computedStatus: statusOf(coupon) }))
+    coupons: coupons.map((coupon) => {
+      const receiptNote = parseReceiptNote(coupon.note);
+      return {
+        ...coupon,
+        note_text: receiptNote.issueReceipt || receiptNote.redeemReceipt ? "" : coupon.note,
+        issue_receipt_path: receiptNote.issueReceipt?.path || "",
+        redeem_receipt_path: receiptNote.redeemReceipt?.path || "",
+        computedStatus: statusOf(coupon)
+      };
+    })
   };
 }
 
@@ -59,7 +74,7 @@ async function upsert(env, table, rows) {
 }
 
 function withoutActivityContent(rows) {
-  return rows.map(({ activity_content, ...row }) => row);
+  return rows.map(({ activity_content, access_code, ...row }) => row);
 }
 
 function isMissingActivityContentColumn(err) {
@@ -81,7 +96,7 @@ async function saveConfig(env, body) {
       updated_at: new Date().toISOString()
     })
   });
-  const merchantRows = merchants.map((merchant, idx) => ({
+  const merchantRows = merchants.map(({ access_code, ...merchant }, idx) => ({
     ...merchant,
     activity_content: merchant.activity_content || "",
     sort_order: Number(merchant.sort_order ?? idx),
@@ -150,6 +165,9 @@ export async function onRequestPost({ request, env }) {
     if (body.action === "clearAllCoupons") return json({ ok: true, data: await clearAllCoupons(env) });
     if (body.action === "voidCoupon") return json({ ok: true, data: await voidCoupon(env, body.code || body.data?.code) });
     if (body.action === "deleteMerchant") return json({ ok: true, data: await deleteMerchant(env, body.id || body.data?.id) });
+    if (body.action === "receiptUrl") {
+      return json({ ok: true, data: { url: await signedReceiptUrl(env, body.data?.path) } });
+    }
     return json({ ok: true, data: await loadConfig(env) });
   } catch (err) {
     return json({ ok: false, message: err.message || "后台请求失败。" }, err.statusCode || 400);

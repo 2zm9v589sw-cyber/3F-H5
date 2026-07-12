@@ -1,8 +1,6 @@
 import QRCode from "qrcode";
 import jsQR from "jsqr";
 
-const SUPABASE_URL = "https://xpohldtsdttqklqkkskk.supabase.co";
-const API_KEY = "sb_publishable_Gk05pu6uyKQ6kZvQwJk_aw_5C8oguZ3";
 const root = document.getElementById("root");
 
 let bootstrap = null;
@@ -11,7 +9,10 @@ let stream = null;
 let scanFrame = null;
 let adminData = null;
 let adminPassword = sessionStorage.getItem("cb3fAdminPassword") || "";
-let merchantAuthed = sessionStorage.getItem("cb3fMerchantAuthed") === "true";
+let merchantToken = sessionStorage.getItem("cb3fMerchantToken") || "";
+let merchantProfile = JSON.parse(sessionStorage.getItem("cb3fMerchantProfile") || "null");
+let merchantAuthed = Boolean(merchantToken && merchantProfile?.id);
+const receiptPhotos = { issue: null, redeem: null };
 const adminFilters = { keyword: "", status: "all", type: "all" };
 
 const params = () => new URLSearchParams(location.search);
@@ -25,25 +26,32 @@ const isBeverageMerchant = (merchant) => /饮品|甜品|茶|咖啡|水吧/.test(
 const BOOTSTRAP_CACHE_KEY = "cb3fBootstrapCacheV2";
 const BOOTSTRAP_CACHE_MS = 30 * 1000;
 const LEGACY_TEST_COUPON_CODES = new Set(["REP-0708-261876", "GUI-0708-138044"]);
-const isTestCoupon = (coupon) => String(coupon.note || "").startsWith("AUTO_LOAD_TEST") || LEGACY_TEST_COUPON_CODES.has(coupon.code);
+const isTestCoupon = (coupon) => String(coupon.note_text || coupon.note || "").startsWith("AUTO_LOAD_TEST") || LEGACY_TEST_COUPON_CODES.has(coupon.code);
 
-async function api(path, options = {}) {
-  const res = await fetch(`${SUPABASE_URL}${path}`, {
-    ...options,
+async function couponApi(action, data = {}, authenticated = true) {
+  const res = await fetch("/api/coupon", {
+    method: "POST",
     headers: {
-      apikey: API_KEY,
-      Authorization: `Bearer ${API_KEY}`,
       "Content-Type": "application/json",
-      ...(options.headers || {})
-    }
+      ...(authenticated && merchantToken ? { Authorization: `Bearer ${merchantToken}` } : {})
+    },
+    body: JSON.stringify({ action, ...data })
   });
-  const text = await res.text();
-  if (!res.ok) throw new Error(text || `请求失败：${res.status}`);
-  return text ? JSON.parse(text) : null;
+  const json = await res.json();
+  if (!res.ok || !json.ok) {
+    if (res.status === 401) clearMerchantSession();
+    throw new Error(json.message || "券操作失败。");
+  }
+  return json;
 }
 
-async function rpc(name, body) {
-  return api(`/rest/v1/rpc/${name}`, { method: "POST", body: JSON.stringify(body) });
+function clearMerchantSession() {
+  merchantToken = "";
+  merchantProfile = null;
+  merchantAuthed = false;
+  sessionStorage.removeItem("cb3fMerchantToken");
+  sessionStorage.removeItem("cb3fMerchantProfile");
+  sessionStorage.removeItem("cb3fMerchantAuthed");
 }
 
 async function loadBootstrap() {
@@ -137,11 +145,11 @@ function homeBenefitGroupsHtml(data) {
   `).join("");
 }
 
-async function merchantAuthCall(password) {
+async function merchantAuthCall(merchantId, password) {
   const res = await fetch("/api/merchant-auth", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ password })
+    body: JSON.stringify({ merchantId, password })
   });
   const json = await res.json();
   if (!res.ok || !json.ok) throw new Error(json.message || "商户口令校验失败");
@@ -149,11 +157,13 @@ async function merchantAuthCall(password) {
 }
 
 function renderMerchantLogin(nextTitle, nextRender) {
-  layout(nextTitle, "商户操作前请先输入统一口令", `
+  const merchants = (bootstrap?.merchants || []).filter((m) => m.active !== false && (m.can_issue || m.can_redeem));
+  layout(nextTitle, "选择本店并输入独立商户口令", `
     <section class="panel">
       <div class="section-title"><h2>商户登录</h2><span class="muted">仅参与活动商户使用</span></div>
       <div class="grid">
-        <div class="col-8"><label>商户口令</label><input id="merchantPassword" type="password" placeholder="输入商户统一口令" /></div>
+        <div class="col-6"><label>商户/铺位号</label><select id="merchantLoginId">${merchants.map((m) => `<option value="${esc(m.id)}">${esc(m.shop_code)}｜${esc(m.name)}</option>`).join("")}</select></div>
+        <div class="col-6"><label>独立商户口令</label><input id="merchantPassword" type="password" inputmode="numeric" placeholder="输入本店口令" /></div>
         <div class="col-4" style="align-self:end"><button id="merchantLoginBtn" class="primary">进入</button></div>
       </div>
       <div id="msg" class="alert" style="display:none"></div>
@@ -162,12 +172,61 @@ function renderMerchantLogin(nextTitle, nextRender) {
   document.getElementById("merchantLoginBtn").onclick = async () => {
     document.getElementById("msg").style.display = "block";
     try {
-      await merchantAuthCall(document.getElementById("merchantPassword").value);
+      const auth = await merchantAuthCall(document.getElementById("merchantLoginId").value, document.getElementById("merchantPassword").value);
+      merchantToken = auth.token;
+      merchantProfile = { ...auth.merchant, ...(bootstrap.merchants.find((m) => m.id === auth.merchant.id) || {}) };
       merchantAuthed = true;
-      sessionStorage.setItem("cb3fMerchantAuthed", "true");
+      sessionStorage.setItem("cb3fMerchantToken", merchantToken);
+      sessionStorage.setItem("cb3fMerchantProfile", JSON.stringify(merchantProfile));
       await nextRender();
     } catch (err) {
       setMsg(err.message, "bad");
+    }
+  };
+}
+
+async function prepareReceipt(file) {
+  if (!file?.type?.startsWith("image/")) throw new Error("请拍摄或选择小票照片。");
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  const hashCanvas = document.createElement("canvas");
+  hashCanvas.width = 9;
+  hashCanvas.height = 8;
+  const hashCtx = hashCanvas.getContext("2d", { willReadFrequently: true });
+  hashCtx.drawImage(canvas, 0, 0, 9, 8);
+  const pixels = hashCtx.getImageData(0, 0, 9, 8).data;
+  let bits = "";
+  for (let y = 0; y < 8; y += 1) {
+    for (let x = 0; x < 8; x += 1) {
+      const i = (y * 9 + x) * 4;
+      const j = i + 4;
+      const left = pixels[i] * 0.299 + pixels[i + 1] * 0.587 + pixels[i + 2] * 0.114;
+      const right = pixels[j] * 0.299 + pixels[j + 1] * 0.587 + pixels[j + 2] * 0.114;
+      bits += left > right ? "1" : "0";
+    }
+  }
+  let perceptualHash = "";
+  for (let i = 0; i < 64; i += 4) perceptualHash += parseInt(bits.slice(i, i + 4), 2).toString(16);
+  return { dataUrl: canvas.toDataURL("image/jpeg", 0.76), perceptualHash };
+}
+
+function bindReceiptInput(kind) {
+  const inputEl = document.getElementById(`${kind}Receipt`);
+  const preview = document.getElementById(`${kind}ReceiptPreview`);
+  inputEl.onchange = async () => {
+    try {
+      preview.textContent = "正在处理照片...";
+      receiptPhotos[kind] = await prepareReceipt(inputEl.files?.[0]);
+      preview.innerHTML = `<img src="${receiptPhotos[kind].dataUrl}" alt="小票照片预览" /><span>小票照片已就绪</span>`;
+    } catch (err) {
+      receiptPhotos[kind] = null;
+      preview.textContent = err.message;
     }
   };
 }
@@ -209,9 +268,9 @@ async function renderHome() {
 async function renderMerchant() {
   const data = await loadBootstrap();
   if (!merchantAuthed) return renderMerchantLogin("商户发券", renderMerchant);
-  const merchants = data.merchants.filter((m) => m.can_issue);
+  if (!merchantProfile?.can_issue) return layout("商户发券", "当前商户没有发券权限", `<section class="panel"><div class="alert bad">${esc(merchantProfile?.shop_code)}｜${esc(merchantProfile?.name)} 未开通发券权限。</div></section>`);
   const types = data.couponTypes;
-  const thresholds = data.thresholdRules;
+  const threshold = data.thresholdRules.find((r) => r.category_key === merchantProfile.category_key);
   layout("商户发券", "满足满额条件后生成顾客券二维码", `
     <section class="panel">
       <div class="section-title"><h2>商户发券</h2><span class="muted">券当天有效，逾期自动作废</span></div>
@@ -220,17 +279,10 @@ async function renderMerchant() {
           <label>券类型</label>
           <select id="couponType">${types.map((t) => `<option value="${esc(t.code)}">${esc(t.name)}</option>`).join("")}</select>
         </div>
-        <div class="col-4">
-          <label>消费类别</label>
-          <select id="category">${thresholds.map((r) => `<option value="${esc(r.category_key)}">${esc(r.category_name)} 满${money(r.min_amount)}元</option>`).join("")}</select>
-        </div>
-        <div class="col-4">
-          <label>顾客实际消费金额</label>
-          <input id="amount" type="number" min="0" inputmode="decimal" placeholder="填写实际消费金额" />
-        </div>
+        <div class="col-4"><label>消费类别/赠券条件</label><div class="readonly">${esc(threshold?.category_name || merchantProfile.category_name || "已配置类别")}${threshold ? ` 满${money(threshold.min_amount)}元` : ""}</div></div>
         <div class="col-8">
           <label>发券商户/铺位号</label>
-          <select id="merchant">${merchants.map((m) => `<option value="${m.id}">${esc(m.shop_code)}｜${esc(m.name)}</option>`).join("")}</select>
+          <div class="readonly">${esc(merchantProfile.shop_code)}｜${esc(merchantProfile.name)}</div>
         </div>
         <div class="col-8">
           <label>券面权益说明</label>
@@ -240,6 +292,12 @@ async function renderMerchant() {
           <label>当前券类型参与商户活动内容</label>
           <div id="merchantActivityContent" class="readonly activity-list"></div>
         </div>
+        <div class="col-12">
+          <label>消费小票照片（必须现场拍摄）</label>
+          <input id="issueReceipt" type="file" accept="image/*" capture="environment" />
+          <div id="issueReceiptPreview" class="receipt-preview">尚未拍摄小票</div>
+          <p class="muted">仅留存小票照片用于后台核验及防重复，不识别金额。</p>
+        </div>
         <div class="col-12"><button id="issueBtn" class="green">生成顾客券二维码</button></div>
       </div>
       <div id="msg" class="alert" style="display:none"></div>
@@ -248,6 +306,7 @@ async function renderMerchant() {
   `);
   document.getElementById("couponType").onchange = () => updateIssueActivityContent(data);
   updateIssueActivityContent(data);
+  bindReceiptInput("issue");
   document.getElementById("issueBtn").onclick = issueCoupon;
 }
 
@@ -257,13 +316,8 @@ async function issueCoupon() {
   document.getElementById("msg").style.display = "block";
   setMsg("正在生成...");
   try {
-    const result = await rpc("public_issue_coupon", {
-      p_coupon_type_code: document.getElementById("couponType").value,
-      p_source_merchant_id: document.getElementById("merchant").value,
-      p_category_key: document.getElementById("category").value,
-      p_order_amount: Number(document.getElementById("amount").value || 0)
-    });
-    if (!result.ok) throw new Error(result.message || "生成失败");
+    if (!receiptPhotos.issue) throw new Error("请先现场拍摄消费小票。");
+    const result = await couponApi("issue", { couponTypeCode: document.getElementById("couponType").value, receipt: receiptPhotos.issue });
     lastCoupon = result.coupon;
     const url = `${location.origin}${location.pathname}?code=${encodeURIComponent(lastCoupon.code)}`;
     const qr = await QRCode.toDataURL(url, { width: 280, margin: 1 });
@@ -277,6 +331,9 @@ async function issueCoupon() {
         <p class="muted">有效期：${esc(lastCoupon.start_date)} 至 ${esc(lastCoupon.end_date)}</p>
       </div>
     `;
+    receiptPhotos.issue = null;
+    document.getElementById("issueReceipt").value = "";
+    document.getElementById("issueReceiptPreview").textContent = "尚未拍摄小票";
     setMsg("已生成顾客券二维码。", "ok");
   } catch (err) {
     setMsg(err.message, "bad");
@@ -290,8 +347,9 @@ async function renderCoupon() {
   const code = params().get("code") || "";
   layout("顾客券面", "请向商户出示此页面核销", `<section class="panel"><div id="couponBox" class="coupon">正在加载...</div></section>`);
   try {
-    const result = await rpc("public_get_coupon", { p_code: code });
-    if (!result.ok) throw new Error(result.message || "未找到该券码");
+    const response = await fetch(`/api/coupon?code=${encodeURIComponent(code)}`, { cache: "no-store" });
+    const result = await response.json();
+    if (!response.ok || !result.ok) throw new Error(result.message || "未找到该券码");
     const c = result.coupon;
     const redeemUrl = `${location.origin}${location.pathname}?role=redeem&code=${encodeURIComponent(c.code)}`;
     const qr = await QRCode.toDataURL(redeemUrl, { width: 280, margin: 1 });
@@ -312,16 +370,16 @@ async function renderCoupon() {
 async function renderRedeem() {
   const data = await loadBootstrap();
   if (!merchantAuthed) return renderMerchantLogin("商户核销", renderRedeem);
-  layout("商户核销", "扫码顾客券面二维码，填写实际消费金额后核销", `
+  if (!merchantProfile?.can_redeem) return layout("商户核销", "当前商户没有核销权限", `<section class="panel"><div class="alert bad">${esc(merchantProfile?.shop_code)}｜${esc(merchantProfile?.name)} 未开通核销权限。</div></section>`);
+  layout("商户核销", "扫码顾客券面二维码并拍摄消费小票后核销", `
     <section class="panel">
       <div class="section-title"><h2>商户核销</h2><button id="scanBtn" class="primary">打开扫码</button></div>
       <video id="video" class="scanner" playsinline muted style="display:none"></video>
       <div class="grid">
         <div class="col-6"><label>券码</label><input id="code" value="${esc(params().get("code") || "")}" placeholder="扫码自动带入，手输备用" /></div>
-        <div class="col-6"><label>核销点位</label><select id="redeemMerchant"></select></div>
-        <div class="col-12"><label>当前核销点位活动内容</label><div id="redeemActivityContent" class="readonly">请选择核销点位</div></div>
-        <div class="col-6"><label>核销金额（填写实际消费金额）</label><input id="redeemAmount" type="number" min="0" inputmode="decimal" /></div>
-        <div class="col-6"><label>备注</label><input id="note" /></div>
+        <div class="col-6"><label>核销点位</label><div class="readonly">${esc(merchantProfile.shop_code)}｜${esc(merchantProfile.name)}</div></div>
+        <div class="col-12"><label>当前核销点位活动内容</label><div class="readonly">${esc(activityText(merchantProfile))}</div></div>
+        <div class="col-12"><label>消费小票照片（必须现场拍摄）</label><input id="redeemReceipt" type="file" accept="image/*" capture="environment" /><div id="redeemReceiptPreview" class="receipt-preview">尚未拍摄小票</div><p class="muted">仅留存小票照片用于后台核验及防重复，不识别金额。</p></div>
         <div class="col-12"><button id="checkBtn">查询券状态</button> <button id="redeemBtn" class="orange">确认核销</button></div>
       </div>
       <div id="msg" class="alert" style="display:none"></div>
@@ -331,9 +389,7 @@ async function renderRedeem() {
   document.getElementById("scanBtn").onclick = startScan;
   document.getElementById("checkBtn").onclick = checkCoupon;
   document.getElementById("redeemBtn").onclick = redeemCoupon;
-  fillRedeemMerchants(data.merchants);
-  document.getElementById("redeemMerchant").onchange = updateRedeemActivityContent;
-  updateRedeemActivityContent();
+  bindReceiptInput("redeem");
   if (params().get("code")) await checkCoupon();
 }
 
@@ -420,7 +476,7 @@ function drawAdmin() {
       coupon.coupon_type_name,
       coupon.source_label,
       coupon.redeem_point_label,
-      coupon.note
+      coupon.note_text
     ].join(" ").toLowerCase();
     if (keyword && !haystack.includes(keyword)) return false;
     if (adminFilters.status !== "all" && coupon.computedStatus !== adminFilters.status) return false;
@@ -435,8 +491,8 @@ function drawAdmin() {
     used: d.coupons.filter((c) => c.computedStatus === "used").length,
     expired: d.coupons.filter((c) => c.computedStatus === "expired").length,
     test: d.coupons.filter(isTestCoupon).length,
-    issuedSales: sumMoney(d.coupons, "issued_amount"),
-    redeemedSales: sumMoney(d.coupons.filter((c) => c.computedStatus === "used"), "redeem_amount")
+    issueReceipts: d.coupons.filter((c) => c.issue_receipt_path).length,
+    redeemReceipts: d.coupons.filter((c) => c.redeem_receipt_path).length
   };
   document.getElementById("adminBox").innerHTML = `
     <div class="admin-workspace">
@@ -448,8 +504,8 @@ function drawAdmin() {
             <div class="metric-card"><span>已核销</span><strong>${metrics.used}</strong></div>
             <div class="metric-card"><span>已过期/作废</span><strong>${metrics.expired}</strong></div>
             <div class="metric-card"><span>测试券</span><strong>${metrics.test}</strong></div>
-            <div class="metric-card"><span>发券带动销售</span><strong>${money(metrics.issuedSales)}</strong></div>
-            <div class="metric-card"><span>核销带动销售</span><strong>${money(metrics.redeemedSales)}</strong></div>
+            <div class="metric-card"><span>发券小票</span><strong>${metrics.issueReceipts}</strong></div>
+            <div class="metric-card"><span>核销小票</span><strong>${metrics.redeemReceipts}</strong></div>
           </div>
         </div>
         <div class="admin-actions">
@@ -464,8 +520,9 @@ function drawAdmin() {
         <section class="admin-panel">
           <div class="section-title"><h2>活动基础配置</h2></div>
           <div class="grid">
-            <div class="col-8"><label>活动名称</label>${input(d.setting.activity_name, "setting.activity_name")}</div>
-            <div class="col-4"><label>活动结束日期</label>${input(d.setting.ends_on || "", "setting.ends_on", "date")}</div>
+            <div class="col-6"><label>活动名称</label>${input(d.setting.activity_name, "setting.activity_name")}</div>
+            <div class="col-3"><label>活动开始日期</label>${input(d.setting.starts_on || "", "setting.starts_on", "date")}</div>
+            <div class="col-3"><label>活动结束日期</label>${input(d.setting.ends_on || "", "setting.ends_on", "date")}</div>
             <div class="col-4"><label>默认有效天数</label>${input(d.setting.default_valid_days, "setting.default_valid_days", "number")}</div>
             <div class="col-12"><label>券面权益说明</label><textarea data-path="setting.benefit_text" rows="4">${esc(d.setting.benefit_text)}</textarea></div>
           </div>
@@ -488,8 +545,8 @@ function drawAdmin() {
 
       <section class="admin-panel merchants admin-full">
         <div class="section-title"><h2>商户/点位配置</h2><button id="addMerchant">新增商户</button></div>
-        <div class="table-wrap"><table><thead><tr><th>铺位号</th><th>商户名称</th><th>活动内容</th><th>类别</th><th>亲子多经</th><th>可发券</th><th>可核销</th><th>启用</th><th>操作</th></tr></thead><tbody>
-          ${d.merchants.map((m, i) => `<tr><td>${input(m.shop_code, `merchants.${i}.shop_code`)}</td><td>${input(m.name, `merchants.${i}.name`)}</td><td><textarea data-path="merchants.${i}.activity_content" rows="2">${esc(m.activity_content || "")}</textarea></td><td>${input(m.category_name, `merchants.${i}.category_name`)}</td><td>${selectBool(m.is_guide_point, `merchants.${i}.is_guide_point`)}</td><td>${selectBool(m.can_issue, `merchants.${i}.can_issue`)}</td><td>${selectBool(m.can_redeem, `merchants.${i}.can_redeem`)}</td><td>${selectBool(m.active, `merchants.${i}.active`)}</td><td><button class="deleteMerchantBtn orange" data-id="${esc(m.id)}" data-label="${esc(`${m.shop_code}｜${m.name}`)}">删除</button></td></tr>`).join("")}
+        <div class="table-wrap"><table><thead><tr><th>铺位号</th><th>商户名称</th><th>独立口令</th><th>活动内容</th><th>类别</th><th>亲子多经</th><th>可发券</th><th>可核销</th><th>启用</th><th>操作</th></tr></thead><tbody>
+          ${d.merchants.map((m, i) => `<tr><td>${input(m.shop_code, `merchants.${i}.shop_code`)}</td><td>${input(m.name, `merchants.${i}.name`)}</td><td><div class="readonly code">${esc(m.access_code || "保存后生成")}</div></td><td><textarea data-path="merchants.${i}.activity_content" rows="2">${esc(m.activity_content || "")}</textarea></td><td><select class="merchantCategory" data-path="merchants.${i}.category_key" data-index="${i}">${d.thresholdRules.map((r) => `<option value="${esc(r.category_key)}" ${r.category_key === m.category_key ? "selected" : ""}>${esc(r.category_name)}</option>`).join("")}</select></td><td>${selectBool(m.is_guide_point, `merchants.${i}.is_guide_point`)}</td><td>${selectBool(m.can_issue, `merchants.${i}.can_issue`)}</td><td>${selectBool(m.can_redeem, `merchants.${i}.can_redeem`)}</td><td>${selectBool(m.active, `merchants.${i}.active`)}</td><td><button class="deleteMerchantBtn orange" data-id="${esc(m.id)}" data-label="${esc(`${m.shop_code}｜${m.name}`)}">删除</button></td></tr>`).join("")}
         </tbody></table></div>
       </section>
 
@@ -504,22 +561,30 @@ function drawAdmin() {
 
       <div class="admin-data-grid">
         <section class="admin-panel coupons">
-          <div class="section-title"><h2>发券带动销售</h2><span class="muted">${issuedCoupons.length} 张｜合计 ${money(sumMoney(issuedCoupons, "issued_amount"))} 元</span></div>
-          <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券商户</th><th>发券消费金额</th><th>消费类别</th><th>发券时间</th><th>状态</th><th>操作</th></tr></thead><tbody>
-            ${issuedCoupons.slice(0, 200).map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.issued_amount || "")}</td><td>${esc(c.issued_category_key || "")}</td><td>${esc(c.issued_at || "")}</td><td>${esc(c.computedStatus)}</td><td>${c.computedStatus === "unused" ? `<button class="voidCouponBtn orange" data-code="${esc(c.code)}">作废</button>` : ""}</td></tr>`).join("")}
+          <div class="section-title"><h2>商户发券记录</h2><span class="muted">${issuedCoupons.length} 张｜小票 ${issuedCoupons.filter((c) => c.issue_receipt_path).length} 张</span></div>
+          <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券商户</th><th>消费类别</th><th>发券时间</th><th>小票</th><th>状态</th><th>操作</th></tr></thead><tbody>
+            ${issuedCoupons.slice(0, 200).map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.issued_category_key || "")}</td><td>${esc(c.issued_at || "")}</td><td>${c.issue_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.issue_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.computedStatus)}</td><td>${c.computedStatus === "unused" ? `<button class="voidCouponBtn orange" data-code="${esc(c.code)}">作废</button>` : ""}</td></tr>`).join("")}
           </tbody></table></div>
         </section>
 
         <section class="admin-panel coupons">
-          <div class="section-title"><h2>核销带动销售</h2><span class="muted">${redeemedCoupons.length} 张｜合计 ${money(sumMoney(redeemedCoupons, "redeem_amount"))} 元</span></div>
-          <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券来源</th><th>核销点位</th><th>核销金额</th><th>核销时间</th><th>备注</th></tr></thead><tbody>
-            ${redeemedCoupons.slice(0, 200).map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.redeem_point_label || "")}</td><td>${esc(c.redeem_amount || "")}</td><td>${esc(c.redeemed_at || "")}</td><td>${esc(c.note || "")}</td></tr>`).join("")}
+          <div class="section-title"><h2>商户核销记录</h2><span class="muted">${redeemedCoupons.length} 张｜小票 ${redeemedCoupons.filter((c) => c.redeem_receipt_path).length} 张</span></div>
+          <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券来源</th><th>核销点位</th><th>核销时间</th><th>小票</th><th>备注</th></tr></thead><tbody>
+            ${redeemedCoupons.slice(0, 200).map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.redeem_point_label || "")}</td><td>${esc(c.redeemed_at || "")}</td><td>${c.redeem_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.redeem_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.note_text || "")}</td></tr>`).join("")}
           </tbody></table></div>
         </section>
       </div>
     </div>
   `;
   bindAdminInputs();
+  document.querySelectorAll(".merchantCategory").forEach((select) => {
+    select.onchange = () => {
+      const merchant = d.merchants[Number(select.dataset.index)];
+      const rule = d.thresholdRules.find((item) => item.category_key === select.value);
+      merchant.category_key = select.value;
+      merchant.category_name = rule?.category_name || merchant.category_name;
+    };
+  });
   document.getElementById("saveAdmin").onclick = saveAdmin;
   document.getElementById("addThreshold").onclick = () => { d.thresholdRules.push({ id: crypto.randomUUID(), category_key: "new", category_name: "新类别", min_amount: 0, active: true, sort_order: d.thresholdRules.length }); drawAdmin(); };
   document.getElementById("addCouponType").onclick = () => { d.couponTypes.push({ id: crypto.randomUUID(), code: "new", name: "新券类型", redeem_scope: "regular_merchants", active: true, sort_order: d.couponTypes.length }); drawAdmin(); };
@@ -532,6 +597,9 @@ function drawAdmin() {
   document.getElementById("couponTypeFilter").onchange = (event) => { adminFilters.type = event.target.value; drawAdmin(); };
   document.querySelectorAll(".voidCouponBtn").forEach((button) => {
     button.onclick = () => voidCoupon(button.dataset.code);
+  });
+  document.querySelectorAll(".receiptBtn").forEach((button) => {
+    button.onclick = () => viewReceipt(button.dataset.path);
   });
   document.querySelectorAll(".deleteMerchantBtn").forEach((button) => {
     button.onclick = () => deleteMerchant(button.dataset.id, button.dataset.label);
@@ -577,14 +645,23 @@ function validateAdminData() {
 }
 
 function exportAdminCsv() {
-  const headers = ["券码", "券类型", "发券商户", "发券消费金额", "发券消费类别", "发券时间", "券状态", "有效期", "核销点位", "核销金额", "核销时间", "备注"];
-  const rows = adminData.coupons.map((c) => [c.code, c.coupon_type_name, c.source_label, c.issued_amount, c.issued_category_key, c.issued_at, c.computedStatus, `${c.start_date}至${c.end_date}`, c.redeem_point_label, c.redeem_amount, c.redeemed_at, c.note]);
+  const headers = ["券码", "券类型", "发券商户", "发券消费类别", "发券时间", "发券小票留存", "券状态", "有效期", "核销点位", "核销时间", "核销小票留存", "备注"];
+  const rows = adminData.coupons.map((c) => [c.code, c.coupon_type_name, c.source_label, c.issued_category_key, c.issued_at, c.issue_receipt_path ? "是" : "否", c.computedStatus, `${c.start_date}至${c.end_date}`, c.redeem_point_label, c.redeemed_at, c.redeem_receipt_path ? "是" : "否", c.note_text]);
   const csv = [headers, ...rows].map((row) => row.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
   link.download = "3F电子券核销数据.csv";
   link.click();
   URL.revokeObjectURL(link.href);
+}
+
+async function viewReceipt(path) {
+  try {
+    const result = await adminCall("receiptUrl", { path });
+    window.open(result.url, "_blank", "noopener");
+  } catch (err) {
+    setMsg(err.message, "bad");
+  }
 }
 
 async function clearTestCoupons() {
@@ -639,32 +716,11 @@ async function deleteMerchant(id, label) {
   }
 }
 
-function fillRedeemMerchants(list) {
-  let filtered = list.filter((m) => m.can_redeem);
-  if (lastCoupon) {
-    const type = bootstrap.couponTypes.find((t) => t.id === lastCoupon.coupon_type_id || t.code === lastCoupon.coupon_type_code);
-    if (type?.redeem_scope === "guide_points") filtered = filtered.filter((m) => m.is_guide_point);
-    if (type?.redeem_scope === "regular_merchants") filtered = filtered.filter((m) => !m.is_guide_point);
-  }
-  document.getElementById("redeemMerchant").innerHTML = filtered.map((m) => `<option value="${m.id}">${esc(m.shop_code)}｜${esc(m.name)}</option>`).join("");
-  updateRedeemActivityContent();
-}
-
-function updateRedeemActivityContent() {
-  const el = document.getElementById("redeemActivityContent");
-  const select = document.getElementById("redeemMerchant");
-  if (!el || !select || !bootstrap) return;
-  const merchant = bootstrap.merchants.find((m) => m.id === select.value);
-  el.textContent = activityText(merchant);
-}
-
 async function checkCoupon() {
   document.getElementById("msg").style.display = "block";
   try {
-    const result = await rpc("public_get_coupon", { p_code: document.getElementById("code").value });
-    if (!result.ok) throw new Error(result.message || "查询失败");
+    const result = await couponApi("check", { code: document.getElementById("code").value });
     lastCoupon = result.coupon;
-    fillRedeemMerchants(bootstrap.merchants);
     const status = lastCoupon.computedStatus === "used" ? "已使用" : lastCoupon.computedStatus === "expired" ? "已过期" : "未使用";
     document.getElementById("couponInfo").style.display = "block";
     document.getElementById("couponInfo").innerHTML = `
@@ -683,15 +739,12 @@ async function checkCoupon() {
 
 async function redeemCoupon() {
   try {
-    const result = await rpc("public_redeem_coupon", {
-      p_code: document.getElementById("code").value,
-      p_redeem_merchant_id: document.getElementById("redeemMerchant").value,
-      p_redeem_amount: Number(document.getElementById("redeemAmount").value || 0),
-      p_phone_last4: "",
-      p_note: document.getElementById("note").value
-    });
-    if (!result.ok) throw new Error(result.message || "核销失败");
+    if (!receiptPhotos.redeem) throw new Error("请先现场拍摄消费小票。");
+    const result = await couponApi("redeem", { code: document.getElementById("code").value, receipt: receiptPhotos.redeem });
     lastCoupon = result.coupon;
+    receiptPhotos.redeem = null;
+    document.getElementById("redeemReceipt").value = "";
+    document.getElementById("redeemReceiptPreview").textContent = "尚未拍摄小票";
     setMsg("核销成功，券码已锁定为已使用。", "ok");
     await checkCoupon();
   } catch (err) {
