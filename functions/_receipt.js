@@ -80,7 +80,6 @@ export async function assertUniqueReceipt(env, receipt) {
 }
 
 export async function storeReceipt(env, decoded, merchant, kind, couponCode) {
-  await ensureBucket(env);
   const extension = decoded.mime === "image/png" ? "png" : decoded.mime === "image/webp" ? "webp" : "jpg";
   const path = `content/${decoded.contentHash}.${extension}`;
   const res = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${BUCKET}/${path}`, {

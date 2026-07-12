@@ -54,6 +54,11 @@ function clearMerchantSession() {
   sessionStorage.removeItem("cb3fMerchantAuthed");
 }
 
+async function qrImageUrl(value) {
+  const svg = await QRCode.toString(value, { type: "svg", width: 280, margin: 1, errorCorrectionLevel: "M" });
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
 async function loadBootstrap() {
   if (bootstrap) return bootstrap;
   if (role() !== "admin") {
@@ -320,7 +325,7 @@ async function issueCoupon() {
     const result = await couponApi("issue", { couponTypeCode: document.getElementById("couponType").value, receipt: receiptPhotos.issue });
     lastCoupon = result.coupon;
     const url = `${location.origin}${location.pathname}?code=${encodeURIComponent(lastCoupon.code)}`;
-    const qr = await QRCode.toDataURL(url, { width: 280, margin: 1 });
+    const qr = await qrImageUrl(url);
     document.getElementById("result").style.display = "block";
     document.getElementById("result").innerHTML = `
       <div class="coupon">
@@ -352,7 +357,7 @@ async function renderCoupon() {
     if (!response.ok || !result.ok) throw new Error(result.message || "未找到该券码");
     const c = result.coupon;
     const redeemUrl = `${location.origin}${location.pathname}?role=redeem&code=${encodeURIComponent(c.code)}`;
-    const qr = await QRCode.toDataURL(redeemUrl, { width: 280, margin: 1 });
+    const qr = await qrImageUrl(redeemUrl);
     const status = c.computedStatus === "used" ? "已使用" : c.computedStatus === "expired" ? "已过期" : "未使用";
     document.getElementById("couponBox").innerHTML = `
       <div class="coupon-name">${esc(c.coupon_type_name)}</div>
