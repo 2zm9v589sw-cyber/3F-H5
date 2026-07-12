@@ -92,8 +92,13 @@ export async function storeReceipt(env, decoded, merchant, kind, couponCode) {
     },
     body: decoded.bytes
   });
-  if (res.status === 409) throw new Error("该小票已提交过，不能重复使用。");
-  if (!res.ok) throw new Error("小票照片上传失败，请重试。");
+  if (!res.ok) {
+    const errorText = await res.text();
+    if (res.status === 409 || /duplicate|already exists|resource exists/i.test(errorText)) {
+      throw new Error("该小票已提交过，不能重复使用。");
+    }
+    throw new Error("小票照片上传失败，请重试。");
+  }
   return {
     path,
     contentHash: decoded.contentHash,
@@ -102,6 +107,20 @@ export async function storeReceipt(env, decoded, merchant, kind, couponCode) {
     merchantLabel: `${merchant.shop_code}｜${merchant.name}`,
     capturedAt: new Date().toISOString()
   };
+}
+
+export async function deleteReceipt(env, path) {
+  if (!path) return;
+  const res = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${BUCKET}`, {
+    method: "DELETE",
+    headers: {
+      apikey: env.SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ prefixes: [path] })
+  });
+  if (!res.ok) throw new Error("小票照片清理失败。");
 }
 
 export async function signedReceiptUrl(env, path) {

@@ -1,6 +1,6 @@
 import { json, parseActivityContents, readBody, supabase } from "../_shared.js";
 import { bearerToken, verifyMerchantToken } from "../_merchant-session.js";
-import { assertUniqueReceipt, parseReceiptNote, storeReceipt } from "../_receipt.js";
+import { assertUniqueReceipt, deleteReceipt, parseReceiptNote, storeReceipt } from "../_receipt.js";
 
 function shanghaiDate() {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -76,13 +76,15 @@ async function issue(env, request, body) {
     })
   });
   if (!result?.ok || !result.coupon?.code) throw new Error(result?.message || "发券失败。");
+  let savedReceipt;
   try {
-    const savedReceipt = await storeReceipt(env, receipt, merchant, "issue", result.coupon.code);
+    savedReceipt = await storeReceipt(env, receipt, merchant, "issue", result.coupon.code);
     await supabase(env, `coupons?code=eq.${encodeURIComponent(result.coupon.code)}`, {
       method: "PATCH",
       body: JSON.stringify({ note: JSON.stringify({ issueReceipt: savedReceipt }), issued_amount: 0 })
     });
   } catch (err) {
+    if (savedReceipt?.path) await deleteReceipt(env, savedReceipt.path).catch(() => {});
     await supabase(env, `coupons?code=eq.${encodeURIComponent(result.coupon.code)}`, { method: "DELETE" }).catch(() => {});
     throw err;
   }
