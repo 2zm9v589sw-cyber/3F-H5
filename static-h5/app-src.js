@@ -163,7 +163,7 @@ function renderMerchantLogin(nextTitle, nextRender) {
       <div class="section-title"><h2>商户登录</h2><span class="muted">仅参与活动商户使用</span></div>
       <div class="grid">
         <div class="col-6"><label>商户/铺位号</label><select id="merchantLoginId">${merchants.map((m) => `<option value="${esc(m.id)}">${esc(m.shop_code)}｜${esc(m.name)}</option>`).join("")}</select></div>
-        <div class="col-6"><label>独立商户口令</label><input id="merchantPassword" type="password" inputmode="numeric" placeholder="输入本店口令" /></div>
+        <div class="col-6"><label>6位数字商户口令</label><input id="merchantPassword" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="输入本店6位数字口令" /></div>
         <div class="col-4" style="align-self:end"><button id="merchantLoginBtn" class="primary">进入</button></div>
       </div>
       <div id="msg" class="alert" style="display:none"></div>

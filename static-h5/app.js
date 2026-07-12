@@ -34,7 +34,7 @@ Minimum version required to store current data is: `+E+`.
       <div class="section-title"><h2>\u5546\u6237\u767B\u5F55</h2><span class="muted">\u4EC5\u53C2\u4E0E\u6D3B\u52A8\u5546\u6237\u4F7F\u7528</span></div>
       <div class="grid">
         <div class="col-6"><label>\u5546\u6237/\u94FA\u4F4D\u53F7</label><select id="merchantLoginId">${e.map(o=>`<option value="${g(o.id)}">${g(o.shop_code)}\uFF5C${g(o.name)}</option>`).join("")}</select></div>
-        <div class="col-6"><label>\u72EC\u7ACB\u5546\u6237\u53E3\u4EE4</label><input id="merchantPassword" type="password" inputmode="numeric" placeholder="\u8F93\u5165\u672C\u5E97\u53E3\u4EE4" /></div>
+        <div class="col-6"><label>6\u4F4D\u6570\u5B57\u5546\u6237\u53E3\u4EE4</label><input id="merchantPassword" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="6" placeholder="\u8F93\u5165\u672C\u5E976\u4F4D\u6570\u5B57\u53E3\u4EE4" /></div>
         <div class="col-4" style="align-self:end"><button id="merchantLoginBtn" class="primary">\u8FDB\u5165</button></div>
       </div>
       <div id="msg" class="alert" style="display:none"></div>

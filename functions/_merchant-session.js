@@ -1,5 +1,4 @@
 const encoder = new TextEncoder();
-const CODE_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
 
 function bytesToBase64Url(bytes) {
   let binary = "";
@@ -41,7 +40,8 @@ export async function merchantAccessCode(env, merchant) {
   const secret = merchantSecret(env);
   if (!secret) throw new Error("商户鉴权密钥未配置。");
   const bytes = await digest(`${secret}:${merchant.id}:${merchant.shop_code || ""}`);
-  return Array.from(bytes.slice(0, 8), (byte) => CODE_ALPHABET[byte % CODE_ALPHABET.length]).join("");
+  const value = ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+  return String(value % 1000000).padStart(6, "0");
 }
 
 export async function createMerchantToken(env, merchantId) {
