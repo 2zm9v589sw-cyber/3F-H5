@@ -303,6 +303,10 @@ async function renderMerchant() {
           <div id="issueReceiptPreview" class="receipt-preview">尚未拍摄小票</div>
           <p class="muted">仅留存小票照片用于后台核验及防重复，不识别金额。</p>
         </div>
+        <div class="col-12 consent-box">
+          <label class="consent-check"><input id="receiptConsent" type="checkbox" /> <span>我已向顾客告知并取得同意</span></label>
+          <p>告知内容：本活动将收集消费小票照片，仅用于活动资格核验、防止重复领券及后台审计，不识别消费金额。小票仅限授权管理人员查看，并在活动结束30天后自动删除。请拍摄时尽量遮挡姓名、手机号、支付账号及完整付款码等非必要信息。</p>
+        </div>
         <div class="col-12"><button id="issueBtn" class="green">生成顾客券二维码</button></div>
       </div>
       <div id="msg" class="alert" style="display:none"></div>
@@ -322,7 +326,8 @@ async function issueCoupon() {
   setMsg("正在生成...");
   try {
     if (!receiptPhotos.issue) throw new Error("请先现场拍摄消费小票。");
-    const result = await couponApi("issue", { couponTypeCode: document.getElementById("couponType").value, receipt: receiptPhotos.issue });
+    if (!document.getElementById("receiptConsent").checked) throw new Error("请先向顾客完成信息收集告知并勾选确认。");
+    const result = await couponApi("issue", { couponTypeCode: document.getElementById("couponType").value, receipt: receiptPhotos.issue, receiptConsent: true });
     lastCoupon = result.coupon;
     const url = `${location.origin}${location.pathname}?code=${encodeURIComponent(lastCoupon.code)}`;
     const qr = await qrImageUrl(url);
@@ -339,6 +344,7 @@ async function issueCoupon() {
     receiptPhotos.issue = null;
     document.getElementById("issueReceipt").value = "";
     document.getElementById("issueReceiptPreview").textContent = "尚未拍摄小票";
+    document.getElementById("receiptConsent").checked = false;
     setMsg("已生成顾客券二维码。", "ok");
   } catch (err) {
     setMsg(err.message, "bad");

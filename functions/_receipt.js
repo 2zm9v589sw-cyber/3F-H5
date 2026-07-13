@@ -110,7 +110,12 @@ export async function storeReceipt(env, decoded, merchant, kind, couponCode) {
 }
 
 export async function deleteReceipt(env, path) {
-  if (!path) return;
+  return deleteReceipts(env, path ? [path] : []);
+}
+
+export async function deleteReceipts(env, paths) {
+  const prefixes = [...new Set(paths.filter(Boolean))];
+  if (!prefixes.length) return [];
   const res = await fetch(`${env.SUPABASE_URL}/storage/v1/object/${BUCKET}`, {
     method: "DELETE",
     headers: {
@@ -118,9 +123,10 @@ export async function deleteReceipt(env, path) {
       Authorization: `Bearer ${env.SUPABASE_SERVICE_ROLE_KEY}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ prefixes: [path] })
+    body: JSON.stringify({ prefixes })
   });
   if (!res.ok) throw new Error("小票照片清理失败。");
+  return res.json().catch(() => []);
 }
 
 export async function signedReceiptUrl(env, path) {

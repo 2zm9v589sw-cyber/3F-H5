@@ -61,6 +61,7 @@ async function activitySetting(env) {
 async function issue(env, request, body) {
   const merchant = await merchantFromRequest(env, request);
   if (!merchant.can_issue) throw new Error("当前商户未开通发券权限。");
+  if (body.receiptConsent !== true) throw new Error("请先向顾客说明小票信息用途并取得同意。");
   await activitySetting(env);
   const receipt = await assertUniqueReceipt(env, body.receipt);
   const thresholdRows = await supabase(env, `threshold_rules?select=*&category_key=eq.${encodeURIComponent(merchant.category_key)}&active=eq.true&limit=1`);
@@ -81,7 +82,7 @@ async function issue(env, request, body) {
     savedReceipt = await storeReceipt(env, receipt, merchant, "issue", result.coupon.code);
     await supabase(env, `coupons?code=eq.${encodeURIComponent(result.coupon.code)}`, {
       method: "PATCH",
-      body: JSON.stringify({ note: JSON.stringify({ issueReceipt: savedReceipt }), issued_amount: 0 })
+      body: JSON.stringify({ note: JSON.stringify({ issueReceipt: savedReceipt, receiptConsentAt: new Date().toISOString() }), issued_amount: 0 })
     });
   } catch (err) {
     if (savedReceipt?.path) await deleteReceipt(env, savedReceipt.path).catch(() => {});
