@@ -9,6 +9,7 @@ node_modules
 .env*
 部署完成信息.md
 edgeone-dist
+supabase/.temp/
 
 # Tencent Cloud EdgeOne
 .env
