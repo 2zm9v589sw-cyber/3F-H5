@@ -22,7 +22,7 @@ const money = (v) => Number(v || 0).toFixed(2).replace(/\.00$/, "");
 const sumMoney = (rows, key) => rows.reduce((sum, row) => sum + Number(row[key] || 0), 0);
 const activityText = (merchant) => merchant?.activity_content?.trim() || "该品牌活动内容待后台维护。";
 const hasActivityContent = (merchant) => Boolean(merchant?.activity_content?.trim());
-const isBeverageMerchant = (merchant) => /饮品|甜品|茶|咖啡|水吧/.test(`${merchant?.category_name || ""}${merchant?.name || ""}`);
+const isBeverageMerchant = (merchant) => /餐饮|饮品|甜品|茶|咖啡|水吧/.test(`${merchant?.category_name || ""}${merchant?.name || ""}`);
 const BOOTSTRAP_CACHE_KEY = "cb3fBootstrapCacheV2";
 const BOOTSTRAP_CACHE_MS = 30 * 1000;
 const LEGACY_TEST_COUPON_CODES = new Set(["REP-0708-261876", "GUI-0708-138044"]);
