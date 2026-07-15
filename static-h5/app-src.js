@@ -266,17 +266,25 @@ function bindReceiptInput(kind) {
 }
 
 async function renderHome() {
+  root.classList.remove("admin-app");
+  root.innerHTML = `
+    <main class="home-loading" aria-label="正在加载活动内容">
+      <div class="home-loading-inner">
+        <div class="loading-line"></div>
+        <div class="loading-card"></div>
+      </div>
+    </main>
+  `;
   await loadBootstrap();
   const setting = bootstrap?.setting;
   const data = bootstrap;
-  root.classList.remove("admin-app");
   root.innerHTML = `
     <main class="home-shell">
       <section class="poster">
         <div class="poster-content">
           <div class="poster-badge">西宁城北吾悦广场 3F 暑期专属</div>
           <h1 class="poster-title">暑期3F<br />品牌权益集合</h1>
-          <p class="poster-subtitle">到店消费满足条件即可领取电子券，按券类型享受对应参与商户权益。以下内容来自后台已维护活动，后续商户权益更新后首页自动同步。</p>
+          <p class="poster-subtitle">到店消费满足条件即可领取电子券，按券类型解锁对应参与商户权益。左右滑动选择券种，上下滑动查看该券全部活动。</p>
           <div class="home-benefit-track">
             ${homeBenefitGroupsHtml(data)}
           </div>
@@ -284,7 +292,7 @@ async function renderHome() {
         </div>
       </section>
       <section class="standalone-pass">
-        <div class="section-title"><h2>暑期通玩套餐独立宣传</h2><span class="muted">独立售卖/使用，不参与电子券发券及用券核销</span></div>
+        <div class="section-title"><h2>亲子一站式通玩套餐</h2><span class="muted">独立售卖与使用，不参与电子券发券及核销</span></div>
         <img src="./assets/standalone-pass-poster.webp?v=20260711-2" alt="亲子一站式通玩套餐宣传图" />
       </section>
       <section class="ops-card">

@@ -179,19 +179,15 @@
       .poster {
         position: relative;
         max-width: 720px;
-        min-height: 860px;
         margin: 0 auto;
-        padding: 22px 18px 28px;
-        display: flex;
-        flex-direction: column;
-        justify-content: flex-end;
+        padding: 390px 18px 28px;
       }
       .poster::before {
         content: "";
         position: absolute;
         inset: 0;
         background:
-          linear-gradient(180deg, rgba(255,255,255,.04) 0%, rgba(255,255,255,.18) 34%, rgba(255,255,255,.92) 58%, rgba(255,255,255,.98) 100%);
+          linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.08) 32%, rgba(255,255,255,.94) 48%, rgba(255,255,255,.99) 100%);
         pointer-events: none;
       }
       .poster-content { position: relative; z-index: 1; }
@@ -278,12 +274,14 @@
       .home-benefit-track::-webkit-scrollbar-track {
         background: rgba(255,255,255,.5);
         border-radius: 999px;
+      }
       .home-benefit-track::-webkit-scrollbar-thumb {
         background: rgba(15, 118, 110, .42);
         border-radius: 999px;
       }
       .home-benefit-group {
-        flex: 0 0 min(86%, 520px);
+        flex: 0 0 calc((100% - 12px) / 2);
+        min-width: 300px;
         scroll-snap-align: start;
         background: rgba(255,255,255,.92);
         border: 1px solid rgba(255,255,255,.74);
@@ -334,6 +332,7 @@
         box-shadow: 0 12px 30px rgba(31, 80, 105, .1);
         overflow: hidden;
       }
+      .standalone-pass .section-title { flex-wrap: wrap; }
       .standalone-pass img {
         display: block;
         width: 100%;
@@ -343,6 +342,32 @@
       .ops-card { max-width: 720px; margin: 14px auto 0; padding: 14px; }
       .ops-card .nav { justify-content: center; }
       .ops-card a { background: #fff; }
+      .home-loading {
+        min-height: 100vh;
+        margin: -18px -14px -48px;
+        padding: 350px 24px 48px;
+        background:
+          linear-gradient(180deg, rgba(255,255,255,0) 0%, rgba(255,255,255,.94) 48%, #f5f7fb 100%),
+          url("./assets/summer-pass-poster-bg.webp") center top / cover no-repeat;
+      }
+      .home-loading-inner { max-width: 680px; margin: 0 auto; }
+      .loading-line, .loading-card {
+        overflow: hidden;
+        position: relative;
+        background: rgba(255,255,255,.82);
+        border: 1px solid rgba(255,255,255,.9);
+      }
+      .loading-line::after, .loading-card::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        transform: translateX(-100%);
+        background: linear-gradient(90deg, transparent, rgba(255,255,255,.76), transparent);
+        animation: home-loading 1.2s infinite;
+      }
+      .loading-line { width: 52%; height: 38px; border-radius: 8px; }
+      .loading-card { height: 180px; margin-top: 18px; border-radius: 8px; }
+      @keyframes home-loading { to { transform: translateX(100%); } }
       @media (max-width: 760px) {
         .topbar { align-items: flex-start; flex-direction: column; }
         .grid { display: block; }
@@ -357,19 +382,24 @@
         .admin-data-grid { grid-template-columns: 1fr; }
         .metric-card { flex: 1 1 30%; min-width: 96px; }
         .table-wrap { max-height: 420px; }
-        .poster { min-height: 820px; padding: 20px 10px 24px; }
+        .poster { padding: 300px 8px 24px; }
         .poster-title { font-size: 31px; }
         .poster-subtitle { font-size: 14px; }
         .price-band { grid-template-columns: 1fr; }
         .project-grid { grid-template-columns: 1fr; }
-        .home-benefit-group { flex-basis: 88%; }
+        .home-benefit-group { flex-basis: 92%; min-width: 0; }
         .home-benefit-list { grid-template-columns: 1fr; max-height: 360px; }
         .project-card { min-height: auto; }
+        .standalone-pass { padding: 12px; }
+        .standalone-pass .section-title { align-items: flex-start; }
+        .standalone-pass .section-title .muted { line-height: 1.5; }
+        .ops-card .nav a { flex: 1 1 42%; text-align: center; }
+        .home-loading { padding: 280px 18px 42px; }
       }
     </style>
   </head>
   <body>
     <div id="root" class="app"></div>
-    <script src="./app.js?v=20260715-2"></script>
+    <script src="./app.js?v=20260715-3"></script>
   </body>
 </html>
