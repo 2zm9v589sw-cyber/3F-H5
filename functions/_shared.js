@@ -20,6 +20,10 @@ export async function readBody(request) {
 }
 
 export async function supabase(env, path, init = {}) {
+  return (await supabaseWithMeta(env, path, init)).data;
+}
+
+export async function supabaseWithMeta(env, path, init = {}) {
   const url = env.SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("云端数据库环境变量未配置。");
@@ -34,7 +38,11 @@ export async function supabase(env, path, init = {}) {
   });
   const text = await res.text();
   if (!res.ok) throw new Error(text || `Supabase 请求失败：${res.status}`);
-  return text ? JSON.parse(text) : null;
+  return {
+    data: text ? JSON.parse(text) : null,
+    count: Number((res.headers.get("Content-Range") || "").split("/")[1]) || 0,
+    headers: res.headers
+  };
 }
 
 export function parseActivityContents(setting) {

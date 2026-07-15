@@ -1,5 +1,5 @@
 import { json, supabase } from "../_shared.js";
-import { deleteReceipts, parseReceiptNote } from "../_receipt.js";
+import { deleteReceipts, listReceiptPaths, parseReceiptNote } from "../_receipt.js";
 
 function shanghaiDate() {
   return new Intl.DateTimeFormat("en-CA", {
@@ -31,12 +31,12 @@ async function cleanup(env) {
 
   const coupons = await supabase(env, "coupons?select=id,note&note=not.is.null");
   const updates = [];
-  const paths = [];
+  const referencedPaths = [];
   for (const coupon of coupons) {
     const note = parseReceiptNote(coupon.note);
     if (!note.issueReceipt && !note.redeemReceipt) continue;
-    if (note.issueReceipt?.path) paths.push(note.issueReceipt.path);
-    if (note.redeemReceipt?.path) paths.push(note.redeemReceipt.path);
+    if (note.issueReceipt?.path) referencedPaths.push(note.issueReceipt.path);
+    if (note.redeemReceipt?.path) referencedPaths.push(note.redeemReceipt.path);
     updates.push({
       id: coupon.id,
       note: JSON.stringify({
@@ -47,18 +47,20 @@ async function cleanup(env) {
     });
   }
 
+  const paths = [...new Set([...(await listReceiptPaths(env)), ...referencedPaths])];
   let deletedFiles = 0;
   for (let index = 0; index < paths.length; index += 100) {
     const deleted = await deleteReceipts(env, paths.slice(index, index + 100));
     deletedFiles += deleted.length;
   }
+  await supabase(env, "receipt_fingerprints?id=not.is.null", { method: "DELETE" });
   for (let index = 0; index < updates.length; index += 50) {
     await Promise.all(updates.slice(index, index + 50).map((item) => supabase(env, `coupons?id=eq.${item.id}`, {
       method: "PATCH",
       body: JSON.stringify({ note: item.note })
     })));
   }
-  return { due: true, today, deleteOn, deletedFiles, updatedCoupons: updates.length };
+  return { due: true, today, deleteOn, deletedFiles, updatedCoupons: updates.length, sweptOrphans: paths.length - new Set(referencedPaths).size };
 }
 
 export async function onRequestPost({ request, env }) {

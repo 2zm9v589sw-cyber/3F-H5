@@ -23,7 +23,7 @@ if (!merchantAuthed) {
   localStorage.removeItem("cb3fMerchantExpiresAt");
 }
 const receiptPhotos = { issue: null, redeem: null };
-const adminFilters = { keyword: "", status: "all", type: "all" };
+const adminFilters = { keyword: "", status: "all", type: "all", from: "", to: "", page: 1, pageSize: 30 };
 
 const params = () => new URLSearchParams(location.search);
 const role = () => params().get("role") || (params().get("code") ? "coupon" : "home");
@@ -40,20 +40,35 @@ const LEGACY_TEST_COUPON_CODES = new Set(["REP-0708-261876", "GUI-0708-138044"])
 const isTestCoupon = (coupon) => String(coupon.note_text || coupon.note || "").startsWith("AUTO_LOAD_TEST") || LEGACY_TEST_COUPON_CODES.has(coupon.code);
 
 async function couponApi(action, data = {}, authenticated = true) {
-  const res = await fetch("/api/coupon", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(authenticated && merchantToken ? { Authorization: `Bearer ${merchantToken}` } : {})
-    },
-    body: JSON.stringify({ action, ...data })
-  });
-  const json = await res.json();
-  if (!res.ok || !json.ok) {
-    if (res.status === 401) clearMerchantSession();
-    throw new Error(json.message || "券操作失败。");
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const res = await fetch("/api/coupon", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(authenticated && merchantToken ? { Authorization: `Bearer ${merchantToken}` } : {})
+        },
+        body: JSON.stringify({ action, ...data })
+      });
+      const text = await res.text();
+      let json;
+      try { json = JSON.parse(text); } catch { json = null; }
+      if (res.ok && json?.ok) return json;
+      if (res.status === 401) clearMerchantSession();
+      const err = new Error(json?.message || (res.status >= 500 ? "网络服务暂时繁忙，正在重试。" : "券操作失败。"));
+      err.retryable = res.status >= 500 || !json;
+      throw err;
+    } catch (err) {
+      lastError = err;
+      if (attempt < 2 && (err.retryable || err instanceof TypeError)) {
+        await new Promise((resolve) => setTimeout(resolve, 700 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
   }
-  return json;
+  throw lastError || new Error("券操作失败。");
 }
 
 function clearMerchantSession() {
@@ -422,7 +437,7 @@ async function renderRedeem() {
 
 async function adminCall(action, data) {
   let lastErr = null;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
       const res = await fetch("/api/admin-config", {
         method: "POST",
@@ -434,7 +449,7 @@ async function adminCall(action, data) {
       return json.data;
     } catch (err) {
       lastErr = err;
-      if (attempt === 0) await new Promise((resolve) => setTimeout(resolve, 600));
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 800 * (attempt + 1)));
     }
   }
   throw lastErr;
@@ -464,7 +479,7 @@ async function renderAdmin() {
 async function loadAdmin() {
   document.getElementById("msg").style.display = "block";
   try {
-    adminData = await adminCall("get");
+    adminData = await adminCall("get", { filters: adminFilters });
     setMsg("后台已加载。", "ok");
     drawAdmin();
   } catch (err) {
@@ -496,31 +511,12 @@ function bindAdminInputs() {
 
 function drawAdmin() {
   const d = adminData;
-  const filteredCoupons = d.coupons.filter((coupon) => {
-    const keyword = adminFilters.keyword.trim().toLowerCase();
-    const haystack = [
-      coupon.code,
-      coupon.coupon_type_name,
-      coupon.source_label,
-      coupon.redeem_point_label,
-      coupon.note_text
-    ].join(" ").toLowerCase();
-    if (keyword && !haystack.includes(keyword)) return false;
-    if (adminFilters.status !== "all" && coupon.computedStatus !== adminFilters.status) return false;
-    if (adminFilters.type !== "all" && coupon.coupon_type_code !== adminFilters.type) return false;
-    return true;
-  });
-  const issuedCoupons = filteredCoupons;
-  const redeemedCoupons = filteredCoupons.filter((coupon) => coupon.computedStatus === "used");
-  const metrics = {
-    total: d.coupons.length,
-    unused: d.coupons.filter((c) => c.computedStatus === "unused").length,
-    used: d.coupons.filter((c) => c.computedStatus === "used").length,
-    expired: d.coupons.filter((c) => c.computedStatus === "expired").length,
-    test: d.coupons.filter(isTestCoupon).length,
-    issueReceipts: d.coupons.filter((c) => c.issue_receipt_path).length,
-    redeemReceipts: d.coupons.filter((c) => c.redeem_receipt_path).length
-  };
+  const issuedCoupons = d.coupons || [];
+  const redeemedCoupons = d.redeemedCoupons || [];
+  const metrics = d.metrics || {};
+  const pagination = d.pagination || { page: 1, pageSize: 30, issuedTotal: issuedCoupons.length, redeemedTotal: redeemedCoupons.length };
+  const totalPages = Math.max(1, Math.ceil(Math.max(pagination.issuedTotal, pagination.redeemedTotal) / pagination.pageSize));
+  const restorableBatch = (d.archiveBatches || []).find((batch) => !batch.restored_at);
   document.getElementById("adminBox").innerHTML = `
     <div class="admin-workspace">
       <section class="admin-hero">
@@ -530,7 +526,6 @@ function drawAdmin() {
             <div class="metric-card"><span>未使用</span><strong>${metrics.unused}</strong></div>
             <div class="metric-card"><span>已核销</span><strong>${metrics.used}</strong></div>
             <div class="metric-card"><span>已过期/作废</span><strong>${metrics.expired}</strong></div>
-            <div class="metric-card"><span>测试券</span><strong>${metrics.test}</strong></div>
             <div class="metric-card"><span>发券凭证</span><strong>${metrics.issueReceipts}</strong></div>
             <div class="metric-card"><span>核销凭证</span><strong>${metrics.redeemReceipts}</strong></div>
           </div>
@@ -539,7 +534,8 @@ function drawAdmin() {
           <button id="saveAdmin" class="green">保存全部配置</button>
           <button id="clearTestCoupons" class="orange">清除测试券</button>
           <button id="clearAllCoupons" class="orange">清空全部券数据</button>
-          <button id="exportCsv">导出 CSV</button>
+          ${restorableBatch ? `<button id="restoreBatch">恢复最近归档</button>` : ""}
+          <button id="exportCsv">按筛选范围导出</button>
         </div>
       </section>
 
@@ -578,29 +574,41 @@ function drawAdmin() {
       </section>
 
       <section class="admin-panel coupons admin-full">
-        <div class="section-title"><h2>数据筛选</h2><span class="muted">下方发券数据与核销数据共用此筛选条件</span></div>
+        <div class="section-title"><h2>数据筛选与导出范围</h2><span class="muted">筛选在服务器执行，每页 ${pagination.pageSize} 条</span></div>
         <div class="grid">
-          <div class="col-6"><label>搜索券码/商户/备注</label><input id="couponKeyword" value="${esc(adminFilters.keyword)}" placeholder="输入关键词" /></div>
-          <div class="col-3"><label>状态</label><select id="couponStatusFilter"><option value="all">全部</option><option value="unused" ${adminFilters.status === "unused" ? "selected" : ""}>未使用</option><option value="used" ${adminFilters.status === "used" ? "selected" : ""}>已核销</option><option value="expired" ${adminFilters.status === "expired" ? "selected" : ""}>已过期/已作废</option></select></div>
-          <div class="col-3"><label>券类型</label><select id="couponTypeFilter"><option value="all">全部</option>${d.couponTypes.map((t) => `<option value="${esc(t.code)}" ${adminFilters.type === t.code ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></div>
+          <div class="col-4"><label>搜索券码/商户</label><input id="couponKeyword" value="${esc(adminFilters.keyword)}" placeholder="输入关键词" /></div>
+          <div class="col-4"><label>状态</label><select id="couponStatusFilter"><option value="all">全部</option><option value="unused" ${adminFilters.status === "unused" ? "selected" : ""}>未使用</option><option value="used" ${adminFilters.status === "used" ? "selected" : ""}>已核销</option><option value="expired" ${adminFilters.status === "expired" ? "selected" : ""}>已过期/已作废</option></select></div>
+          <div class="col-4"><label>券类型</label><select id="couponTypeFilter"><option value="all">全部</option>${d.couponTypes.map((t) => `<option value="${esc(t.code)}" ${adminFilters.type === t.code ? "selected" : ""}>${esc(t.name)}</option>`).join("")}</select></div>
+          <div class="col-4"><label>发券开始日期</label><input id="couponDateFrom" type="date" value="${esc(adminFilters.from)}" /></div>
+          <div class="col-4"><label>发券结束日期</label><input id="couponDateTo" type="date" value="${esc(adminFilters.to)}" /></div>
+          <div class="col-4" style="align-self:end"><button id="applyCouponFilters" class="primary">查询</button></div>
         </div>
       </section>
 
       <div class="admin-data-grid">
         <section class="admin-panel coupons">
-          <div class="section-title"><h2>商户发券记录</h2><span class="muted">${issuedCoupons.length} 张｜凭证 ${issuedCoupons.filter((c) => c.issue_receipt_path).length} 张</span></div>
+          <div class="section-title"><h2>商户发券记录</h2><span class="muted">共 ${pagination.issuedTotal} 张｜本页 ${issuedCoupons.length} 张</span></div>
           <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券商户</th><th>消费类别</th><th>发券时间</th><th>凭证类型</th><th>凭证</th><th>状态</th><th>操作</th></tr></thead><tbody>
-            ${issuedCoupons.slice(0, 200).map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.issued_category_key || "")}</td><td>${esc(c.issued_at || "")}</td><td>${esc(proofTypeLabel(c.issue_proof_type))}</td><td>${c.issue_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.issue_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.computedStatus)}</td><td>${c.computedStatus === "unused" ? `<button class="voidCouponBtn orange" data-code="${esc(c.code)}">作废</button>` : ""}</td></tr>`).join("")}
+            ${issuedCoupons.map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.issued_category_key || "")}</td><td>${esc(c.issued_at || "")}</td><td>${esc(proofTypeLabel(c.issue_proof_type))}</td><td>${c.issue_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.issue_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.computedStatus)}</td><td>${c.computedStatus === "unused" ? `<button class="voidCouponBtn orange" data-code="${esc(c.code)}">作废</button>` : ""}</td></tr>`).join("")}
           </tbody></table></div>
         </section>
 
         <section class="admin-panel coupons">
-          <div class="section-title"><h2>商户核销记录</h2><span class="muted">${redeemedCoupons.length} 张｜凭证 ${redeemedCoupons.filter((c) => c.redeem_receipt_path).length} 张</span></div>
+          <div class="section-title"><h2>商户核销记录</h2><span class="muted">共 ${pagination.redeemedTotal} 张｜本页 ${redeemedCoupons.length} 张</span></div>
           <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券来源</th><th>核销点位</th><th>核销时间</th><th>凭证类型</th><th>凭证</th><th>备注</th></tr></thead><tbody>
-            ${redeemedCoupons.slice(0, 200).map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.redeem_point_label || "")}</td><td>${esc(c.redeemed_at || "")}</td><td>${esc(proofTypeLabel(c.redeem_proof_type))}</td><td>${c.redeem_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.redeem_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.note_text || "")}</td></tr>`).join("")}
+            ${redeemedCoupons.map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.redeem_point_label || "")}</td><td>${esc(c.redeemed_at || "")}</td><td>${esc(proofTypeLabel(c.redeem_proof_type))}</td><td>${c.redeem_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.redeem_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.note_text || "")}</td></tr>`).join("")}
           </tbody></table></div>
         </section>
       </div>
+      <section class="admin-panel admin-full">
+        <div class="pagination"><button id="prevCouponPage" ${pagination.page <= 1 ? "disabled" : ""}>上一页</button><strong>第 ${pagination.page} / ${totalPages} 页</strong><button id="nextCouponPage" ${pagination.page >= totalPages ? "disabled" : ""}>下一页</button></div>
+      </section>
+      <section class="admin-panel admin-full">
+        <div class="section-title"><h2>后台操作审计</h2><span class="muted">最近 ${(d.auditLogs || []).length} 条</span></div>
+        <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作</th><th>对象</th><th>结果摘要</th></tr></thead><tbody>
+          ${(d.auditLogs || []).map((log) => `<tr><td>${esc(log.created_at)}</td><td>${esc(log.action)}</td><td>${esc(log.target || "")}</td><td>${esc(JSON.stringify(log.detail || {}))}</td></tr>`).join("")}
+        </tbody></table></div>
+      </section>
     </div>
   `;
   bindAdminInputs();
@@ -618,10 +626,11 @@ function drawAdmin() {
   document.getElementById("addMerchant").onclick = () => { d.merchants.push({ id: crypto.randomUUID(), shop_code: "", name: "新商户", activity_content: "", category_key: "retail_kids", category_name: "儿童零售", is_guide_point: false, can_issue: true, can_redeem: true, active: true, sort_order: d.merchants.length }); drawAdmin(); };
   document.getElementById("clearTestCoupons").onclick = clearTestCoupons;
   document.getElementById("clearAllCoupons").onclick = clearAllCoupons;
+  if (document.getElementById("restoreBatch")) document.getElementById("restoreBatch").onclick = () => restoreArchiveBatch(restorableBatch.id);
   document.getElementById("exportCsv").onclick = exportAdminCsv;
-  document.getElementById("couponKeyword").oninput = (event) => { adminFilters.keyword = event.target.value; drawAdmin(); };
-  document.getElementById("couponStatusFilter").onchange = (event) => { adminFilters.status = event.target.value; drawAdmin(); };
-  document.getElementById("couponTypeFilter").onchange = (event) => { adminFilters.type = event.target.value; drawAdmin(); };
+  document.getElementById("applyCouponFilters").onclick = applyAdminFilters;
+  document.getElementById("prevCouponPage").onclick = () => changeAdminPage(-1);
+  document.getElementById("nextCouponPage").onclick = () => changeAdminPage(1);
   document.querySelectorAll(".voidCouponBtn").forEach((button) => {
     button.onclick = () => voidCoupon(button.dataset.code);
   });
@@ -671,15 +680,40 @@ function validateAdminData() {
   }
 }
 
-function exportAdminCsv() {
+async function applyAdminFilters() {
+  adminFilters.keyword = document.getElementById("couponKeyword").value.trim();
+  adminFilters.status = document.getElementById("couponStatusFilter").value;
+  adminFilters.type = document.getElementById("couponTypeFilter").value;
+  adminFilters.from = document.getElementById("couponDateFrom").value;
+  adminFilters.to = document.getElementById("couponDateTo").value;
+  if (adminFilters.from && adminFilters.to && adminFilters.from > adminFilters.to) {
+    setMsg("开始日期不能晚于结束日期。", "bad");
+    return;
+  }
+  adminFilters.page = 1;
+  await loadAdmin();
+}
+
+async function changeAdminPage(delta) {
+  adminFilters.page = Math.max(1, adminFilters.page + delta);
+  await loadAdmin();
+}
+
+async function exportAdminCsv() {
+  try {
+  const result = await adminCall("exportCoupons", { filters: adminFilters });
   const headers = ["券码", "券类型", "发券商户", "发券消费类别", "发券时间", "发券凭证类型", "发券凭证留存", "券状态", "有效期", "核销点位", "核销时间", "核销凭证类型", "核销凭证留存", "备注"];
-  const rows = adminData.coupons.map((c) => [c.code, c.coupon_type_name, c.source_label, c.issued_category_key, c.issued_at, proofTypeLabel(c.issue_proof_type), c.issue_receipt_path ? "是" : "否", c.computedStatus, `${c.start_date}至${c.end_date}`, c.redeem_point_label, c.redeemed_at, proofTypeLabel(c.redeem_proof_type), c.redeem_receipt_path ? "是" : "否", c.note_text]);
+  const rows = result.coupons.map((c) => [c.code, c.coupon_type_name, c.source_label, c.issued_category_key, c.issued_at, proofTypeLabel(c.issue_proof_type), c.issue_receipt_path ? "是" : "否", c.computedStatus, `${c.start_date}至${c.end_date}`, c.redeem_point_label, c.redeemed_at, proofTypeLabel(c.redeem_proof_type), c.redeem_receipt_path ? "是" : "否", c.note_text]);
   const csv = [headers, ...rows].map((row) => row.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
-  link.download = "3F电子券核销数据.csv";
+  link.download = `3F电子券数据_${adminFilters.from || "全部"}_${adminFilters.to || "全部"}.csv`;
   link.click();
   URL.revokeObjectURL(link.href);
+  setMsg(`已按当前筛选范围导出 ${rows.length} 条数据。`, "ok");
+  } catch (err) {
+    setMsg(err.message, "bad");
+  }
 }
 
 async function viewReceipt(path) {
@@ -695,7 +729,7 @@ async function clearTestCoupons() {
   if (!confirm("确认清除后台自动测试产生的测试券吗？正式活动券不会被清除。")) return;
   try {
     const result = await adminCall("clearTestCoupons");
-    setMsg(`已清除 ${result.data?.deleted || 0} 张测试券。`, "ok");
+    setMsg(`已清除 ${result.deleted || 0} 张测试券，并删除 ${result.deletedFiles || 0} 张凭证。`, "ok");
     await loadAdmin();
   } catch (err) {
     setMsg(err.message, "bad");
@@ -703,7 +737,12 @@ async function clearTestCoupons() {
 }
 
 async function clearAllCoupons() {
-  const first = confirm("确认清空全部券数据吗？这会删除所有已发券、已核销、已过期/作废记录。正式活动开始后请勿使用。");
+  const prepared = await adminCall("prepareClearAll");
+  if (!prepared.count) {
+    setMsg("当前没有券数据需要清空。", "ok");
+    return;
+  }
+  const first = confirm(`确认清空全部 ${prepared.count} 张券数据吗？系统会先归档券记录，并同步删除小票图片。`);
   if (!first) return;
   const second = prompt("如确认清空，请输入：清空全部券数据");
   if (second !== "清空全部券数据") {
@@ -711,8 +750,21 @@ async function clearAllCoupons() {
     return;
   }
   try {
-    const result = await adminCall("clearAllCoupons");
-    setMsg(`已清空全部券数据，共删除 ${result.deleted || 0} 张。`, "ok");
+    const result = await adminCall("clearAllCoupons", { confirmToken: prepared.token, confirmText: second });
+    setMsg(`已清空 ${result.deleted || 0} 张券并删除 ${result.deletedFiles || 0} 张凭证，归档批次 ${result.batchId || "无"}。`, "ok");
+    await loadAdmin();
+  } catch (err) {
+    setMsg(err.message, "bad");
+  }
+}
+
+async function restoreArchiveBatch(batchId) {
+  try {
+    const prepared = await adminCall("prepareRestore", { batchId });
+    const confirmed = prompt(`将恢复最近归档的 ${prepared.batch.coupon_count} 张券记录，小票图片因隐私删除不会恢复。请输入：恢复归档券数据`);
+    if (confirmed !== "恢复归档券数据") return;
+    const result = await adminCall("restoreBatch", { batchId, confirmToken: prepared.token, confirmText: confirmed });
+    setMsg(`已恢复 ${result.restored || 0} 张券记录。`, "ok");
     await loadAdmin();
   } catch (err) {
     setMsg(err.message, "bad");

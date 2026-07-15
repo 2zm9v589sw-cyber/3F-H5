@@ -1,6 +1,6 @@
 import { json, parseActivityContents, readBody, supabase } from "../_shared.js";
 import { bearerToken, verifyMerchantToken } from "../_merchant-session.js";
-import { assertUniqueReceipt, deleteReceipt, parseReceiptNote, storeReceipt } from "../_receipt.js";
+import { assertUniqueReceipt, deleteReceipt, deleteReceiptFingerprint, identifyReceipt, parseReceiptNote, registerReceiptFingerprint, storeReceipt } from "../_receipt.js";
 
 function shanghaiDate() {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -67,7 +67,19 @@ async function issue(env, request, body) {
   if (!merchant.can_issue) throw new Error("当前商户未开通发券权限。");
   if (body.receiptConsent !== true) throw new Error("请先向顾客说明小票信息用途并取得同意。");
   await activitySetting(env);
-  const receipt = await assertUniqueReceipt(env, body.receipt);
+  let receipt;
+  try {
+    receipt = await assertUniqueReceipt(env, body.receipt);
+  } catch (err) {
+    if (err.exactReceiptMatch && err.existingCouponCode) {
+      const existing = await loadCoupon(env, err.existingCouponCode).catch(() => null);
+      const issuedRecently = existing?.issued_at && Date.now() - new Date(existing.issued_at).getTime() < 5 * 60 * 1000;
+      if (existing?.source_merchant_id === merchant.id && statusOf(existing) === "unused" && issuedRecently) {
+        return { ok: true, coupon: publicCoupon(existing), reusedAfterRetry: true };
+      }
+    }
+    throw err;
+  }
   const thresholdRows = await supabase(env, `threshold_rules?select=*&category_key=eq.${encodeURIComponent(merchant.category_key)}&active=eq.true&limit=1`);
   const threshold = thresholdRows[0];
   if (!threshold) throw new Error("当前商户的消费类别未配置赠券门槛。");
@@ -85,11 +97,13 @@ async function issue(env, request, body) {
   try {
     savedReceipt = await storeReceipt(env, receipt, merchant, "issue", result.coupon.code);
     savedReceipt.proofType = proofType(body.proofType);
+    await registerReceiptFingerprint(env, receipt, savedReceipt, result.coupon.code, "issue", merchant.id);
     await supabase(env, `coupons?code=eq.${encodeURIComponent(result.coupon.code)}`, {
       method: "PATCH",
       body: JSON.stringify({ note: JSON.stringify({ issueReceipt: savedReceipt, receiptConsentAt: new Date().toISOString() }), issued_amount: 0 })
     });
   } catch (err) {
+    if (savedReceipt?.path) await deleteReceiptFingerprint(env, savedReceipt.path).catch(() => {});
     if (savedReceipt?.path) await deleteReceipt(env, savedReceipt.path).catch(() => {});
     await supabase(env, `coupons?code=eq.${encodeURIComponent(result.coupon.code)}`, { method: "DELETE" }).catch(() => {});
     throw err;
@@ -107,23 +121,84 @@ async function redeem(env, request, body) {
   if (!merchant.can_redeem) throw new Error("当前商户未开通核销权限。");
   await activitySetting(env);
   const coupon = await loadCoupon(env, body.code);
-  if (statusOf(coupon) !== "unused") throw new Error("该券已使用或已过期，不能核销。");
-  const receipt = await assertUniqueReceipt(env, body.receipt);
-  const savedReceipt = await storeReceipt(env, receipt, merchant, "redeem", coupon.code);
-  savedReceipt.proofType = proofType(body.proofType);
+  const receipt = await identifyReceipt(body.receipt);
+  if (coupon.status === "used") {
+    const existingNote = parseReceiptNote(coupon.note);
+    if (existingNote.redeemReceipt?.contentHash === receipt.contentHash && coupon.redeem_merchant_id === merchant.id) {
+      return { ok: true, coupon: publicCoupon(coupon), reusedAfterRetry: true };
+    }
+    throw new Error("该券已使用，不能重复核销。");
+  }
+  if (statusOf(coupon) !== "unused") throw new Error("该券已过期，不能核销。");
+  let savedReceipt;
+  let createdReceiptNow = false;
+  try {
+    await assertUniqueReceipt(env, null, receipt);
+    savedReceipt = await storeReceipt(env, receipt, merchant, "redeem", coupon.code);
+    savedReceipt.proofType = proofType(body.proofType);
+    await registerReceiptFingerprint(env, receipt, savedReceipt, coupon.code, "redeem", merchant.id).catch(async (err) => {
+      await deleteReceipt(env, savedReceipt.path).catch(() => {});
+      throw err;
+    });
+    createdReceiptNow = true;
+  } catch (err) {
+    if (!err.exactReceiptMatch) throw err;
+    const fingerprints = await supabase(env, `receipt_fingerprints?select=*&content_hash=eq.${receipt.contentHash}&coupon_code=eq.${encodeURIComponent(coupon.code)}&receipt_kind=eq.redeem&merchant_id=eq.${encodeURIComponent(merchant.id)}&limit=1`);
+    const fingerprint = fingerprints[0];
+    if (!fingerprint) throw err;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const current = await loadCoupon(env, coupon.code);
+      const currentNote = parseReceiptNote(current.note);
+      if (current.status === "used" && currentNote.redeemReceipt?.contentHash === receipt.contentHash) {
+        return { ok: true, coupon: publicCoupon(current), reusedAfterRetry: true };
+      }
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    savedReceipt = {
+      path: fingerprint.storage_path,
+      contentHash: fingerprint.content_hash,
+      perceptualHash: fingerprint.perceptual_hash,
+      merchantId: merchant.id,
+      merchantLabel: `${merchant.shop_code}｜${merchant.name}`,
+      capturedAt: fingerprint.created_at,
+      proofType: proofType(body.proofType)
+    };
+  }
   const note = parseReceiptNote(coupon.note);
-  const result = await supabase(env, "rpc/public_redeem_coupon", {
-    method: "POST",
-    body: JSON.stringify({
-      p_code: coupon.code,
-      p_redeem_merchant_id: merchant.id,
-      p_redeem_amount: 0,
-      p_phone_last4: "",
-      p_note: JSON.stringify({ ...note, redeemReceipt: savedReceipt })
-    })
-  });
+  let result;
+  try {
+    result = await supabase(env, "rpc/public_redeem_coupon", {
+      method: "POST",
+      body: JSON.stringify({
+        p_code: coupon.code,
+        p_redeem_merchant_id: merchant.id,
+        p_redeem_amount: 0,
+        p_phone_last4: "",
+        p_note: JSON.stringify({ ...note, redeemReceipt: savedReceipt })
+      })
+    });
+  } catch (err) {
+    const refreshed = await loadCoupon(env, coupon.code).catch(() => null);
+    const refreshedNote = parseReceiptNote(refreshed?.note);
+    if (refreshed?.status === "used" && refreshedNote.redeemReceipt?.path === savedReceipt.path) {
+      return { ok: true, coupon: publicCoupon(refreshed), recoveredAfterNetworkError: true };
+    }
+    if (createdReceiptNow) {
+      await deleteReceiptFingerprint(env, savedReceipt.path).catch(() => {});
+      await deleteReceipt(env, savedReceipt.path).catch(() => {});
+    }
+    throw err;
+  }
   if (!result?.ok) {
-    await deleteReceipt(env, savedReceipt.path).catch(() => {});
+    const refreshed = await loadCoupon(env, coupon.code).catch(() => null);
+    const refreshedNote = parseReceiptNote(refreshed?.note);
+    if (refreshed?.status === "used" && refreshedNote.redeemReceipt?.contentHash === receipt.contentHash) {
+      return { ok: true, coupon: publicCoupon(refreshed), reusedAfterRetry: true };
+    }
+    if (createdReceiptNow) {
+      await deleteReceiptFingerprint(env, savedReceipt.path).catch(() => {});
+      await deleteReceipt(env, savedReceipt.path).catch(() => {});
+    }
     throw new Error(result?.message || "核销失败。");
   }
   return { ...result, coupon: publicCoupon(result.coupon) };
