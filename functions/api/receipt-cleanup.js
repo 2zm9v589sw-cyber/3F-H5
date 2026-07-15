@@ -22,6 +22,8 @@ function addDays(dateText, days) {
 }
 
 async function cleanup(env) {
+  const authLogCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  await supabase(env, `admin_audit_logs?action=eq.auth_failure&created_at=lt.${encodeURIComponent(authLogCutoff)}`, { method: "DELETE" });
   const settings = await supabase(env, "activity_settings?select=*&id=eq.main&limit=1");
   const setting = settings[0];
   if (!setting?.ends_on) throw new Error("后台尚未设置活动结束日期。");

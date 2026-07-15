@@ -39,6 +39,32 @@ const BOOTSTRAP_CACHE_MS = 30 * 1000;
 const LEGACY_TEST_COUPON_CODES = new Set(["REP-0708-261876", "GUI-0708-138044"]);
 const isTestCoupon = (coupon) => String(coupon.note_text || coupon.note || "").startsWith("AUTO_LOAD_TEST") || LEGACY_TEST_COUPON_CODES.has(coupon.code);
 
+async function fetchJsonWithRetry(url, options = {}, attempts = 3) {
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const response = await fetch(url, options);
+      const text = await response.text();
+      let json;
+      try { json = JSON.parse(text); } catch { json = null; }
+      if (response.status >= 500 || !json) {
+        const err = new Error("网络服务暂时繁忙，正在重试。");
+        err.retryable = true;
+        throw err;
+      }
+      return { response, json };
+    } catch (err) {
+      lastError = err;
+      if (attempt < attempts - 1 && (err.retryable || err instanceof TypeError)) {
+        await new Promise((resolve) => setTimeout(resolve, 650 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError || new Error("网络服务暂时繁忙，请稍后重试。");
+}
+
 async function couponApi(action, data = {}, authenticated = true) {
   let lastError;
   for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -97,8 +123,7 @@ async function loadBootstrap() {
       }
     } catch {}
   }
-  const res = await fetch("/api/public-config", { cache: role() === "admin" ? "no-store" : "default" });
-  const json = await res.json();
+  const { response: res, json } = await fetchJsonWithRetry("/api/public-config", { cache: role() === "admin" ? "no-store" : "default" });
   if (!res.ok || !json.ok) throw new Error(json.message || "读取活动配置失败");
   bootstrap = json.data;
   if (role() !== "admin") {
@@ -178,12 +203,11 @@ function homeBenefitGroupsHtml(data) {
 }
 
 async function merchantAuthCall(merchantId, password) {
-  const res = await fetch("/api/merchant-auth", {
+  const { response: res, json } = await fetchJsonWithRetry("/api/merchant-auth", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ merchantId, password })
   });
-  const json = await res.json();
   if (!res.ok || !json.ok) throw new Error(json.message || "商户口令校验失败");
   return json;
 }
@@ -397,8 +421,7 @@ async function renderCoupon() {
   const code = params().get("code") || "";
   layout("顾客券面", "请向商户出示此页面核销", `<section class="panel"><div id="couponBox" class="coupon">正在加载...</div></section>`);
   try {
-    const response = await fetch(`/api/coupon?code=${encodeURIComponent(code)}`, { cache: "no-store" });
-    const result = await response.json();
+    const { response, json: result } = await fetchJsonWithRetry(`/api/coupon?code=${encodeURIComponent(code)}`, { cache: "no-store" });
     if (!response.ok || !result.ok) throw new Error(result.message || "未找到该券码");
     const c = result.coupon;
     const redeemUrl = `${location.origin}${location.pathname}?role=redeem&code=${encodeURIComponent(c.code)}`;
@@ -430,6 +453,10 @@ async function renderRedeem() {
         <div class="col-6"><label>核销点位</label><div class="readonly">${esc(merchantProfile.shop_code)}｜${esc(merchantProfile.name)}</div></div>
         <div class="col-12"><label>当前核销点位活动内容</label><div class="readonly">${esc(activityText(merchantProfile))}</div></div>
         <div class="col-12"><label>消费凭证类型</label><select id="redeemProofType"><option value="screen" selected>电脑/平板订单页面</option><option value="paper">纸质小票</option></select><label class="field-gap">消费凭证照片（必须现场拍摄）</label><input id="redeemReceipt" type="file" accept="image/*" capture="environment" /><div id="redeemReceiptPreview" class="receipt-preview">尚未拍摄消费凭证</div><p class="muted">可拍摄电脑/平板订单详情或纸质小票，仅用于后台核验及防重复，不识别金额。</p></div>
+        <div class="col-12 consent-box">
+          <label class="consent-check"><input id="redeemReceiptConsent" type="checkbox" /> <span>我已向顾客告知并取得同意</span></label>
+          <p>告知内容：本次核销将留存消费凭证照片，仅用于核销资格核验、防止重复使用及后台审计，不识别消费金额。凭证仅限授权管理人员查看，并在活动结束30天后自动删除。请拍摄时尽量遮挡姓名、手机号、支付账号及完整付款码等非必要信息。</p>
+        </div>
         <div class="col-12"><button id="checkBtn">查询券状态</button> <button id="redeemBtn" class="orange">确认核销</button></div>
       </div>
       <div id="msg" class="alert" style="display:none"></div>
@@ -452,12 +479,22 @@ async function adminCall(action, data) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password: adminPassword, action, data })
       });
-      const json = await res.json();
-      if (!res.ok || !json.ok) throw new Error(json.message || "后台请求失败");
+      const text = await res.text();
+      let json;
+      try { json = JSON.parse(text); } catch { json = null; }
+      if (!res.ok || !json?.ok) {
+        const err = new Error(json?.message || (res.status >= 500 ? "网络服务暂时繁忙，正在重试。" : "后台请求失败"));
+        err.retryable = res.status >= 500 || !json;
+        throw err;
+      }
       return json.data;
     } catch (err) {
       lastErr = err;
-      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 800 * (attempt + 1)));
+      if (attempt < 2 && (err.retryable || err instanceof TypeError)) {
+        await new Promise((resolve) => setTimeout(resolve, 800 * (attempt + 1)));
+        continue;
+      }
+      throw err;
     }
   }
   throw lastErr;
@@ -827,11 +864,13 @@ async function checkCoupon() {
 async function redeemCoupon() {
   try {
     if (!receiptPhotos.redeem) throw new Error("请先现场拍摄消费凭证。");
-    const result = await couponApi("redeem", { code: document.getElementById("code").value, receipt: receiptPhotos.redeem, proofType: document.getElementById("redeemProofType").value });
+    if (!document.getElementById("redeemReceiptConsent").checked) throw new Error("请先向顾客完成消费凭证用途告知并勾选确认。");
+    const result = await couponApi("redeem", { code: document.getElementById("code").value, receipt: receiptPhotos.redeem, receiptConsent: true, proofType: document.getElementById("redeemProofType").value });
     lastCoupon = result.coupon;
     receiptPhotos.redeem = null;
     document.getElementById("redeemReceipt").value = "";
     document.getElementById("redeemReceiptPreview").textContent = "尚未拍摄消费凭证";
+    document.getElementById("redeemReceiptConsent").checked = false;
     setMsg("核销成功，券码已锁定为已使用。", "ok");
     await checkCoupon();
   } catch (err) {

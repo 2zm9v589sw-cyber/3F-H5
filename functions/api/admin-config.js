@@ -1,11 +1,14 @@
-import { ACTIVITY_CONTENT_PREFIX, json, parseActivityContents, readBody, supabase, supabaseWithMeta } from "../_shared.js";
+import { ACTIVITY_CONTENT_PREFIX, assertAuthAllowed, json, parseActivityContents, readBody, recordAuthFailure, supabase, supabaseWithMeta } from "../_shared.js";
 import { merchantAccessCode } from "../_merchant-session.js";
 import { deleteReceipts, parseReceiptNote, signedReceiptUrl } from "../_receipt.js";
 
 const encoder = new TextEncoder();
 
-function assertAdmin(env, password) {
+async function assertAdmin(env, request, password) {
   if (!env.ADMIN_PASSWORD || password !== env.ADMIN_PASSWORD) {
+    const throttleKey = await assertAuthAllowed(env, request, "admin");
+    await recordAuthFailure(env, throttleKey);
+    await new Promise((resolve) => setTimeout(resolve, 650));
     const err = new Error("后台密码错误。");
     err.statusCode = 401;
     throw err;
@@ -123,7 +126,7 @@ async function loadConfig(env, rawFilters) {
     rowsWithCount(env, couponQuery(filters, { redeemedOnly: true })),
     loadMetrics(env),
     supabase(env, "coupon_archive_batches?select=id,action,coupon_count,receipt_count,created_at,restored_at,note&order=created_at.desc&limit=10"),
-    supabase(env, "admin_audit_logs?select=action,target,detail,created_at&order=created_at.desc&limit=50")
+    supabase(env, "admin_audit_logs?select=action,target,detail,created_at&action=neq.auth_failure&order=created_at.desc&limit=50")
   ]);
   const setting = settings[0];
   const merchantsWithContent = mergeActivityContents(merchants, setting);
@@ -430,7 +433,7 @@ async function exportCoupons(env, rawFilters) {
 export async function onRequestPost({ request, env }) {
   try {
     const body = await readBody(request);
-    assertAdmin(env, body.password);
+    await assertAdmin(env, request, body.password);
     if (body.action === "save") {
       await saveConfig(env, body.data || {});
       return json({ ok: true });

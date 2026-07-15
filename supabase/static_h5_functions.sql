@@ -156,8 +156,16 @@ begin
   if v_type.redeem_scope = 'guide_points' and v_merchant.is_guide_point is not true then
     return jsonb_build_object('ok', false, 'message', '亲子畅玩引导卡只能在已配置的亲子多经点位核销。');
   end if;
+  if (v_type.code = 'new' or v_type.name like '%饮品%')
+     and (v_merchant.is_guide_point is true or concat(v_merchant.category_name, v_merchant.name) !~ '(餐饮|饮品|甜品|茶|咖啡|水吧)') then
+    return jsonb_build_object('ok', false, 'message', '专属折扣饮品只能在已配置的餐饮/饮品商户核销。');
+  end if;
+  if (v_type.code = 'repurchase' or v_type.name like '%复购%')
+     and (v_merchant.is_guide_point is true or concat(v_merchant.category_name, v_merchant.name) ~ '(餐饮|饮品|甜品|茶|咖啡|水吧)') then
+    return jsonb_build_object('ok', false, 'message', '品牌复购引导券只能在参与活动的非餐饮正铺/主次力店核销。');
+  end if;
   if v_type.redeem_scope = 'regular_merchants' and v_merchant.is_guide_point is true then
-    return jsonb_build_object('ok', false, 'message', '品牌复购引导券不能在亲子多经点位核销，请选择正铺或主次力店。');
+    return jsonb_build_object('ok', false, 'message', '该券不能在亲子多经点位核销，请选择对应参与商户。');
   end if;
 
   update public.coupons

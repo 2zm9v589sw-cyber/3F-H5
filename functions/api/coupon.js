@@ -36,6 +36,24 @@ function proofType(value) {
   return value === "paper" ? "paper" : "screen";
 }
 
+function isBeverageMerchant(merchant) {
+  return /餐饮|饮品|甜品|茶|咖啡|水吧/.test(`${merchant?.category_name || ""}${merchant?.name || ""}`);
+}
+
+export function assertRedeemScope(coupon, merchant) {
+  const beverageCoupon = coupon.coupon_type_code === "new" || /饮品/.test(coupon.coupon_type_name || "");
+  const repurchaseCoupon = coupon.coupon_type_code === "repurchase" || /复购/.test(coupon.coupon_type_name || "");
+  if (coupon.coupon_type_code === "guide" && !merchant.is_guide_point) {
+    throw new Error("亲子畅玩引导卡只能在已配置的亲子多经点位核销。");
+  }
+  if (beverageCoupon && (merchant.is_guide_point || !isBeverageMerchant(merchant))) {
+    throw new Error("专属折扣饮品只能在已配置的餐饮/饮品商户核销。");
+  }
+  if (repurchaseCoupon && (merchant.is_guide_point || isBeverageMerchant(merchant))) {
+    throw new Error("品牌复购引导券只能在参与活动的非餐饮正铺/主次力店核销。");
+  }
+}
+
 async function loadCoupon(env, code) {
   const normalized = String(code || "").trim().toUpperCase();
   if (!normalized) throw new Error("请扫码或输入券码。");
@@ -112,15 +130,19 @@ async function issue(env, request, body) {
 }
 
 async function check(env, request, body) {
-  await merchantFromRequest(env, request);
-  return { ok: true, coupon: publicCoupon(await loadCoupon(env, body.code)) };
+  const merchant = await merchantFromRequest(env, request);
+  const coupon = await loadCoupon(env, body.code);
+  assertRedeemScope(coupon, merchant);
+  return { ok: true, coupon: publicCoupon(coupon) };
 }
 
 async function redeem(env, request, body) {
   const merchant = await merchantFromRequest(env, request);
   if (!merchant.can_redeem) throw new Error("当前商户未开通核销权限。");
+  if (body.receiptConsent !== true) throw new Error("请先向顾客说明消费凭证用途并取得同意。");
   await activitySetting(env);
   const coupon = await loadCoupon(env, body.code);
+  assertRedeemScope(coupon, merchant);
   const receipt = await identifyReceipt(body.receipt);
   if (coupon.status === "used") {
     const existingNote = parseReceiptNote(coupon.note);
