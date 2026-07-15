@@ -8,6 +8,8 @@ let lastCoupon = null;
 let stream = null;
 let scanFrame = null;
 let adminData = null;
+let homeRefreshTimer = null;
+let homeLastRefreshAt = 0;
 let adminPassword = sessionStorage.getItem("cb3fAdminPassword") || "";
 let merchantToken = localStorage.getItem("cb3fMerchantToken") || "";
 let merchantProfile = null;
@@ -35,7 +37,6 @@ const activityText = (merchant) => merchant?.activity_content?.trim() || "该品
 const hasActivityContent = (merchant) => Boolean(merchant?.activity_content?.trim());
 const isBeverageMerchant = (merchant) => /餐饮|饮品|甜品|茶|咖啡|水吧/.test(`${merchant?.category_name || ""}${merchant?.name || ""}`);
 const BOOTSTRAP_CACHE_KEY = "cb3fBootstrapCacheV2";
-const BOOTSTRAP_CACHE_MS = 30 * 1000;
 const LEGACY_TEST_COUPON_CODES = new Set(["REP-0708-261876", "GUI-0708-138044"]);
 const isTestCoupon = (coupon) => String(coupon.note_text || coupon.note || "").startsWith("AUTO_LOAD_TEST") || LEGACY_TEST_COUPON_CODES.has(coupon.code);
 
@@ -112,26 +113,31 @@ async function qrImageUrl(value) {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 }
 
-async function loadBootstrap() {
-  if (bootstrap) return bootstrap;
+async function loadBootstrap(force = false) {
+  if (bootstrap && !force) return bootstrap;
+  let cached = null;
   if (role() !== "admin") {
     try {
-      const cached = JSON.parse(localStorage.getItem(BOOTSTRAP_CACHE_KEY) || "null");
-      if (cached?.savedAt && Date.now() - cached.savedAt < BOOTSTRAP_CACHE_MS && cached.data) {
-        bootstrap = cached.data;
-        return bootstrap;
-      }
+      cached = JSON.parse(localStorage.getItem(BOOTSTRAP_CACHE_KEY) || "null")?.data || null;
     } catch {}
   }
-  const { response: res, json } = await fetchJsonWithRetry("/api/public-config", { cache: role() === "admin" ? "no-store" : "default" });
-  if (!res.ok || !json.ok) throw new Error(json.message || "读取活动配置失败");
-  bootstrap = json.data;
-  if (role() !== "admin") {
-    try {
-      localStorage.setItem(BOOTSTRAP_CACHE_KEY, JSON.stringify({ savedAt: Date.now(), data: bootstrap }));
-    } catch {}
+  try {
+    const { response: res, json } = await fetchJsonWithRetry("/api/public-config", { cache: "no-store" });
+    if (!res.ok || !json.ok) throw new Error(json.message || "读取活动配置失败");
+    bootstrap = json.data;
+    if (role() !== "admin") {
+      try {
+        localStorage.setItem(BOOTSTRAP_CACHE_KEY, JSON.stringify({ savedAt: Date.now(), data: bootstrap }));
+      } catch {}
+    }
+    return bootstrap;
+  } catch (err) {
+    if (cached) {
+      bootstrap = cached;
+      return bootstrap;
+    }
+    throw err;
   }
-  return bootstrap;
 }
 
 function roleLinks() {
@@ -329,6 +335,22 @@ async function renderHome() {
       </section>
     </main>
   `;
+  homeLastRefreshAt = Date.now();
+  if (homeRefreshTimer) clearInterval(homeRefreshTimer);
+  homeRefreshTimer = setInterval(() => refreshHomeContent().catch(() => {}), 60 * 1000);
+}
+
+async function refreshHomeContent() {
+  if (role() !== "home" || document.hidden) return;
+  const track = document.querySelector(".home-benefit-track");
+  if (!track) return;
+  const oldScrollLeft = track.scrollLeft;
+  const data = await loadBootstrap(true);
+  track.innerHTML = homeBenefitGroupsHtml(data);
+  track.scrollLeft = Math.min(oldScrollLeft, Math.max(0, track.scrollWidth - track.clientWidth));
+  const note = document.querySelector(".poster-note");
+  if (note) note.textContent = `电子券使用以券面说明、商户核销范围及后台券码状态为准。${data.setting?.benefit_text || ""}`;
+  homeLastRefreshAt = Date.now();
 }
 
 async function renderMerchant() {
@@ -963,5 +985,11 @@ async function main() {
     root.innerHTML = `<div class="alert bad">${esc(err.message)}</div>`;
   }
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden && role() === "home" && Date.now() - homeLastRefreshAt > 5000) {
+    refreshHomeContent().catch(() => {});
+  }
+});
 
 main();

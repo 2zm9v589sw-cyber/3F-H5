@@ -19,7 +19,7 @@ function stringifyActivityContents(merchants) {
   const entries = {};
   merchants.forEach((merchant) => {
     const content = String(merchant.activity_content || "").trim();
-    if (merchant.id && content) entries[merchant.id] = content;
+    if (merchant.id) entries[merchant.id] = content;
   });
   return ACTIVITY_CONTENT_PREFIX + JSON.stringify(entries);
 }
@@ -28,7 +28,9 @@ function mergeActivityContents(merchants, setting) {
   const saved = parseActivityContents(setting);
   return merchants.map((merchant) => ({
     ...merchant,
-    activity_content: saved[merchant.id] || merchant.activity_content || ""
+    activity_content: Object.prototype.hasOwnProperty.call(saved, merchant.id)
+      ? String(saved[merchant.id] || "")
+      : merchant.activity_content || ""
   }));
 }
 

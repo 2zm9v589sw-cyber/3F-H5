@@ -17,12 +17,14 @@ export async function onRequestGet({ env }) {
         setting,
         merchants: merchants.map((merchant) => ({
           ...merchant,
-          activity_content: saved[merchant.id] || merchant.activity_content || ""
+          activity_content: Object.prototype.hasOwnProperty.call(saved, merchant.id)
+            ? String(saved[merchant.id] || "")
+            : merchant.activity_content || ""
         })),
         couponTypes,
         thresholdRules
       }
-    }, 200, "public, max-age=30, s-maxage=30, stale-while-revalidate=120");
+    }, 200, "no-store");
   } catch (err) {
     return json({ ok: false, message: err.message || "读取活动配置失败。" }, 400);
   }
