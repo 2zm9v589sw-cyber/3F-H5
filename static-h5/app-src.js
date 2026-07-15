@@ -9,9 +9,19 @@ let stream = null;
 let scanFrame = null;
 let adminData = null;
 let adminPassword = sessionStorage.getItem("cb3fAdminPassword") || "";
-let merchantToken = sessionStorage.getItem("cb3fMerchantToken") || "";
-let merchantProfile = JSON.parse(sessionStorage.getItem("cb3fMerchantProfile") || "null");
-let merchantAuthed = Boolean(merchantToken && merchantProfile?.id);
+let merchantToken = localStorage.getItem("cb3fMerchantToken") || "";
+let merchantProfile = null;
+try { merchantProfile = JSON.parse(localStorage.getItem("cb3fMerchantProfile") || "null"); } catch {}
+let merchantExpiresAt = Number(localStorage.getItem("cb3fMerchantExpiresAt") || 0);
+let merchantAuthed = Boolean(merchantToken && merchantProfile?.id && merchantExpiresAt > Date.now());
+if (!merchantAuthed) {
+  merchantToken = "";
+  merchantProfile = null;
+  merchantExpiresAt = 0;
+  localStorage.removeItem("cb3fMerchantToken");
+  localStorage.removeItem("cb3fMerchantProfile");
+  localStorage.removeItem("cb3fMerchantExpiresAt");
+}
 const receiptPhotos = { issue: null, redeem: null };
 const adminFilters = { keyword: "", status: "all", type: "all" };
 
@@ -20,6 +30,7 @@ const role = () => params().get("role") || (params().get("code") ? "coupon" : "h
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (s) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s]));
 const money = (v) => Number(v || 0).toFixed(2).replace(/\.00$/, "");
 const sumMoney = (rows, key) => rows.reduce((sum, row) => sum + Number(row[key] || 0), 0);
+const proofTypeLabel = (value) => value === "paper" ? "纸质小票" : value === "screen" ? "电脑/平板订单" : "历史凭证";
 const activityText = (merchant) => merchant?.activity_content?.trim() || "该品牌活动内容待后台维护。";
 const hasActivityContent = (merchant) => Boolean(merchant?.activity_content?.trim());
 const isBeverageMerchant = (merchant) => /餐饮|饮品|甜品|茶|咖啡|水吧/.test(`${merchant?.category_name || ""}${merchant?.name || ""}`);
@@ -49,9 +60,10 @@ function clearMerchantSession() {
   merchantToken = "";
   merchantProfile = null;
   merchantAuthed = false;
-  sessionStorage.removeItem("cb3fMerchantToken");
-  sessionStorage.removeItem("cb3fMerchantProfile");
-  sessionStorage.removeItem("cb3fMerchantAuthed");
+  merchantExpiresAt = 0;
+  localStorage.removeItem("cb3fMerchantToken");
+  localStorage.removeItem("cb3fMerchantProfile");
+  localStorage.removeItem("cb3fMerchantExpiresAt");
 }
 
 async function qrImageUrl(value) {
@@ -180,9 +192,11 @@ function renderMerchantLogin(nextTitle, nextRender) {
       const auth = await merchantAuthCall(document.getElementById("merchantLoginId").value, document.getElementById("merchantPassword").value);
       merchantToken = auth.token;
       merchantProfile = { ...auth.merchant, ...(bootstrap.merchants.find((m) => m.id === auth.merchant.id) || {}) };
+      merchantExpiresAt = Number(auth.expiresAt || 0);
       merchantAuthed = true;
-      sessionStorage.setItem("cb3fMerchantToken", merchantToken);
-      sessionStorage.setItem("cb3fMerchantProfile", JSON.stringify(merchantProfile));
+      localStorage.setItem("cb3fMerchantToken", merchantToken);
+      localStorage.setItem("cb3fMerchantProfile", JSON.stringify(merchantProfile));
+      localStorage.setItem("cb3fMerchantExpiresAt", String(merchantExpiresAt));
       await nextRender();
     } catch (err) {
       setMsg(err.message, "bad");
@@ -191,7 +205,7 @@ function renderMerchantLogin(nextTitle, nextRender) {
 }
 
 async function prepareReceipt(file) {
-  if (!file?.type?.startsWith("image/")) throw new Error("请拍摄或选择小票照片。");
+  if (!file?.type?.startsWith("image/")) throw new Error("请拍摄或选择消费凭证照片。");
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
   const canvas = document.createElement("canvas");
@@ -228,7 +242,7 @@ function bindReceiptInput(kind) {
     try {
       preview.textContent = "正在处理照片...";
       receiptPhotos[kind] = await prepareReceipt(inputEl.files?.[0]);
-      preview.innerHTML = `<img src="${receiptPhotos[kind].dataUrl}" alt="小票照片预览" /><span>小票照片已就绪</span>`;
+      preview.innerHTML = `<img src="${receiptPhotos[kind].dataUrl}" alt="消费凭证照片预览" /><span>消费凭证照片已就绪</span>`;
     } catch (err) {
       receiptPhotos[kind] = null;
       preview.textContent = err.message;
@@ -298,14 +312,16 @@ async function renderMerchant() {
           <div id="merchantActivityContent" class="readonly activity-list"></div>
         </div>
         <div class="col-12">
-          <label>消费小票照片（必须现场拍摄）</label>
+          <label>消费凭证类型</label>
+          <select id="issueProofType"><option value="screen" selected>电脑/平板订单页面</option><option value="paper">纸质小票</option></select>
+          <label class="field-gap">消费凭证照片（必须现场拍摄）</label>
           <input id="issueReceipt" type="file" accept="image/*" capture="environment" />
-          <div id="issueReceiptPreview" class="receipt-preview">尚未拍摄小票</div>
-          <p class="muted">仅留存小票照片用于后台核验及防重复，不识别金额。</p>
+          <div id="issueReceiptPreview" class="receipt-preview">尚未拍摄消费凭证</div>
+          <p class="muted">可拍摄电脑/平板订单详情或纸质小票，仅用于后台核验及防重复，不识别金额。</p>
         </div>
         <div class="col-12 consent-box">
           <label class="consent-check"><input id="receiptConsent" type="checkbox" /> <span>我已向顾客告知并取得同意</span></label>
-          <p>告知内容：本活动将收集消费小票照片，仅用于活动资格核验、防止重复领券及后台审计，不识别消费金额。小票仅限授权管理人员查看，并在活动结束30天后自动删除。请拍摄时尽量遮挡姓名、手机号、支付账号及完整付款码等非必要信息。</p>
+          <p>告知内容：本活动将收集消费凭证照片（电脑/平板订单页面或纸质小票），仅用于活动资格核验、防止重复领券及后台审计，不识别消费金额。凭证仅限授权管理人员查看，并在活动结束30天后自动删除。请拍摄时尽量遮挡姓名、手机号、支付账号及完整付款码等非必要信息。</p>
         </div>
         <div class="col-12"><button id="issueBtn" class="green">生成顾客券二维码</button></div>
       </div>
@@ -325,9 +341,9 @@ async function issueCoupon() {
   document.getElementById("msg").style.display = "block";
   setMsg("正在生成...");
   try {
-    if (!receiptPhotos.issue) throw new Error("请先现场拍摄消费小票。");
+    if (!receiptPhotos.issue) throw new Error("请先现场拍摄消费凭证。");
     if (!document.getElementById("receiptConsent").checked) throw new Error("请先向顾客完成信息收集告知并勾选确认。");
-    const result = await couponApi("issue", { couponTypeCode: document.getElementById("couponType").value, receipt: receiptPhotos.issue, receiptConsent: true });
+    const result = await couponApi("issue", { couponTypeCode: document.getElementById("couponType").value, receipt: receiptPhotos.issue, receiptConsent: true, proofType: document.getElementById("issueProofType").value });
     lastCoupon = result.coupon;
     const url = `${location.origin}${location.pathname}?code=${encodeURIComponent(lastCoupon.code)}`;
     const qr = await qrImageUrl(url);
@@ -343,7 +359,7 @@ async function issueCoupon() {
     `;
     receiptPhotos.issue = null;
     document.getElementById("issueReceipt").value = "";
-    document.getElementById("issueReceiptPreview").textContent = "尚未拍摄小票";
+    document.getElementById("issueReceiptPreview").textContent = "尚未拍摄消费凭证";
     document.getElementById("receiptConsent").checked = false;
     setMsg("已生成顾客券二维码。", "ok");
   } catch (err) {
@@ -382,7 +398,7 @@ async function renderRedeem() {
   const data = await loadBootstrap();
   if (!merchantAuthed) return renderMerchantLogin("商户核销", renderRedeem);
   if (!merchantProfile?.can_redeem) return layout("商户核销", "当前商户没有核销权限", `<section class="panel"><div class="alert bad">${esc(merchantProfile?.shop_code)}｜${esc(merchantProfile?.name)} 未开通核销权限。</div></section>`);
-  layout("商户核销", "扫码顾客券面二维码并拍摄消费小票后核销", `
+  layout("商户核销", "扫码顾客券面二维码并拍摄消费凭证后核销", `
     <section class="panel">
       <div class="section-title"><h2>商户核销</h2><button id="scanBtn" class="primary">打开扫码</button></div>
       <video id="video" class="scanner" playsinline muted style="display:none"></video>
@@ -390,7 +406,7 @@ async function renderRedeem() {
         <div class="col-6"><label>券码</label><input id="code" value="${esc(params().get("code") || "")}" placeholder="扫码自动带入，手输备用" /></div>
         <div class="col-6"><label>核销点位</label><div class="readonly">${esc(merchantProfile.shop_code)}｜${esc(merchantProfile.name)}</div></div>
         <div class="col-12"><label>当前核销点位活动内容</label><div class="readonly">${esc(activityText(merchantProfile))}</div></div>
-        <div class="col-12"><label>消费小票照片（必须现场拍摄）</label><input id="redeemReceipt" type="file" accept="image/*" capture="environment" /><div id="redeemReceiptPreview" class="receipt-preview">尚未拍摄小票</div><p class="muted">仅留存小票照片用于后台核验及防重复，不识别金额。</p></div>
+        <div class="col-12"><label>消费凭证类型</label><select id="redeemProofType"><option value="screen" selected>电脑/平板订单页面</option><option value="paper">纸质小票</option></select><label class="field-gap">消费凭证照片（必须现场拍摄）</label><input id="redeemReceipt" type="file" accept="image/*" capture="environment" /><div id="redeemReceiptPreview" class="receipt-preview">尚未拍摄消费凭证</div><p class="muted">可拍摄电脑/平板订单详情或纸质小票，仅用于后台核验及防重复，不识别金额。</p></div>
         <div class="col-12"><button id="checkBtn">查询券状态</button> <button id="redeemBtn" class="orange">确认核销</button></div>
       </div>
       <div id="msg" class="alert" style="display:none"></div>
@@ -515,8 +531,8 @@ function drawAdmin() {
             <div class="metric-card"><span>已核销</span><strong>${metrics.used}</strong></div>
             <div class="metric-card"><span>已过期/作废</span><strong>${metrics.expired}</strong></div>
             <div class="metric-card"><span>测试券</span><strong>${metrics.test}</strong></div>
-            <div class="metric-card"><span>发券小票</span><strong>${metrics.issueReceipts}</strong></div>
-            <div class="metric-card"><span>核销小票</span><strong>${metrics.redeemReceipts}</strong></div>
+            <div class="metric-card"><span>发券凭证</span><strong>${metrics.issueReceipts}</strong></div>
+            <div class="metric-card"><span>核销凭证</span><strong>${metrics.redeemReceipts}</strong></div>
           </div>
         </div>
         <div class="admin-actions">
@@ -572,16 +588,16 @@ function drawAdmin() {
 
       <div class="admin-data-grid">
         <section class="admin-panel coupons">
-          <div class="section-title"><h2>商户发券记录</h2><span class="muted">${issuedCoupons.length} 张｜小票 ${issuedCoupons.filter((c) => c.issue_receipt_path).length} 张</span></div>
-          <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券商户</th><th>消费类别</th><th>发券时间</th><th>小票</th><th>状态</th><th>操作</th></tr></thead><tbody>
-            ${issuedCoupons.slice(0, 200).map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.issued_category_key || "")}</td><td>${esc(c.issued_at || "")}</td><td>${c.issue_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.issue_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.computedStatus)}</td><td>${c.computedStatus === "unused" ? `<button class="voidCouponBtn orange" data-code="${esc(c.code)}">作废</button>` : ""}</td></tr>`).join("")}
+          <div class="section-title"><h2>商户发券记录</h2><span class="muted">${issuedCoupons.length} 张｜凭证 ${issuedCoupons.filter((c) => c.issue_receipt_path).length} 张</span></div>
+          <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券商户</th><th>消费类别</th><th>发券时间</th><th>凭证类型</th><th>凭证</th><th>状态</th><th>操作</th></tr></thead><tbody>
+            ${issuedCoupons.slice(0, 200).map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.issued_category_key || "")}</td><td>${esc(c.issued_at || "")}</td><td>${esc(proofTypeLabel(c.issue_proof_type))}</td><td>${c.issue_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.issue_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.computedStatus)}</td><td>${c.computedStatus === "unused" ? `<button class="voidCouponBtn orange" data-code="${esc(c.code)}">作废</button>` : ""}</td></tr>`).join("")}
           </tbody></table></div>
         </section>
 
         <section class="admin-panel coupons">
-          <div class="section-title"><h2>商户核销记录</h2><span class="muted">${redeemedCoupons.length} 张｜小票 ${redeemedCoupons.filter((c) => c.redeem_receipt_path).length} 张</span></div>
-          <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券来源</th><th>核销点位</th><th>核销时间</th><th>小票</th><th>备注</th></tr></thead><tbody>
-            ${redeemedCoupons.slice(0, 200).map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.redeem_point_label || "")}</td><td>${esc(c.redeemed_at || "")}</td><td>${c.redeem_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.redeem_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.note_text || "")}</td></tr>`).join("")}
+          <div class="section-title"><h2>商户核销记录</h2><span class="muted">${redeemedCoupons.length} 张｜凭证 ${redeemedCoupons.filter((c) => c.redeem_receipt_path).length} 张</span></div>
+          <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券来源</th><th>核销点位</th><th>核销时间</th><th>凭证类型</th><th>凭证</th><th>备注</th></tr></thead><tbody>
+            ${redeemedCoupons.slice(0, 200).map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.redeem_point_label || "")}</td><td>${esc(c.redeemed_at || "")}</td><td>${esc(proofTypeLabel(c.redeem_proof_type))}</td><td>${c.redeem_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.redeem_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.note_text || "")}</td></tr>`).join("")}
           </tbody></table></div>
         </section>
       </div>
@@ -656,8 +672,8 @@ function validateAdminData() {
 }
 
 function exportAdminCsv() {
-  const headers = ["券码", "券类型", "发券商户", "发券消费类别", "发券时间", "发券小票留存", "券状态", "有效期", "核销点位", "核销时间", "核销小票留存", "备注"];
-  const rows = adminData.coupons.map((c) => [c.code, c.coupon_type_name, c.source_label, c.issued_category_key, c.issued_at, c.issue_receipt_path ? "是" : "否", c.computedStatus, `${c.start_date}至${c.end_date}`, c.redeem_point_label, c.redeemed_at, c.redeem_receipt_path ? "是" : "否", c.note_text]);
+  const headers = ["券码", "券类型", "发券商户", "发券消费类别", "发券时间", "发券凭证类型", "发券凭证留存", "券状态", "有效期", "核销点位", "核销时间", "核销凭证类型", "核销凭证留存", "备注"];
+  const rows = adminData.coupons.map((c) => [c.code, c.coupon_type_name, c.source_label, c.issued_category_key, c.issued_at, proofTypeLabel(c.issue_proof_type), c.issue_receipt_path ? "是" : "否", c.computedStatus, `${c.start_date}至${c.end_date}`, c.redeem_point_label, c.redeemed_at, proofTypeLabel(c.redeem_proof_type), c.redeem_receipt_path ? "是" : "否", c.note_text]);
   const csv = [headers, ...rows].map((row) => row.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
@@ -750,12 +766,12 @@ async function checkCoupon() {
 
 async function redeemCoupon() {
   try {
-    if (!receiptPhotos.redeem) throw new Error("请先现场拍摄消费小票。");
-    const result = await couponApi("redeem", { code: document.getElementById("code").value, receipt: receiptPhotos.redeem });
+    if (!receiptPhotos.redeem) throw new Error("请先现场拍摄消费凭证。");
+    const result = await couponApi("redeem", { code: document.getElementById("code").value, receipt: receiptPhotos.redeem, proofType: document.getElementById("redeemProofType").value });
     lastCoupon = result.coupon;
     receiptPhotos.redeem = null;
     document.getElementById("redeemReceipt").value = "";
-    document.getElementById("redeemReceiptPreview").textContent = "尚未拍摄小票";
+    document.getElementById("redeemReceiptPreview").textContent = "尚未拍摄消费凭证";
     setMsg("核销成功，券码已锁定为已使用。", "ok");
     await checkCoupon();
   } catch (err) {

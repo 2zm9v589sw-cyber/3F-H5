@@ -58,6 +58,8 @@ async function loadConfig(env) {
         note_text: receiptNote.issueReceipt || receiptNote.redeemReceipt ? "" : coupon.note,
         issue_receipt_path: receiptNote.issueReceipt?.path || "",
         redeem_receipt_path: receiptNote.redeemReceipt?.path || "",
+        issue_proof_type: receiptNote.issueReceipt?.proofType || "",
+        redeem_proof_type: receiptNote.redeemReceipt?.proofType || "",
         computedStatus: statusOf(coupon)
       };
     })

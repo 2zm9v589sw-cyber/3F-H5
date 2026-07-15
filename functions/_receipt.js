@@ -29,11 +29,11 @@ function hammingDistance(a, b) {
 
 function decodeReceipt(receipt) {
   const match = String(receipt?.dataUrl || "").match(/^data:(image\/(?:jpeg|png|webp));base64,(.+)$/);
-  if (!match) throw new Error("请现场拍摄消费小票后再提交。");
+  if (!match) throw new Error("请现场拍摄消费凭证后再提交。");
   const bytes = Uint8Array.from(atob(match[2]), (char) => char.charCodeAt(0));
-  if (!bytes.length || bytes.length > MAX_RECEIPT_BYTES) throw new Error("小票图片过大，请重新拍摄。");
+  if (!bytes.length || bytes.length > MAX_RECEIPT_BYTES) throw new Error("消费凭证图片过大，请重新拍摄。");
   if (!/^[0-9a-f]{16}$/i.test(String(receipt?.perceptualHash || ""))) {
-    throw new Error("小票图片指纹无效，请重新拍摄。");
+    throw new Error("消费凭证图片指纹无效，请重新拍摄。");
   }
   return { mime: match[1], bytes, perceptualHash: receipt.perceptualHash.toLowerCase() };
 }
@@ -72,7 +72,7 @@ export async function assertUniqueReceipt(env, receipt) {
     for (const saved of [note.issueReceipt, note.redeemReceipt]) {
       if (!saved) continue;
       if (saved.contentHash === contentHash || hammingDistance(saved.perceptualHash, decoded.perceptualHash) <= 5) {
-        throw new Error(`该小票疑似已使用（关联券码 ${coupon.code}），不能重复提交。`);
+        throw new Error(`该消费凭证疑似已使用（关联券码 ${coupon.code}），不能重复提交。`);
       }
     }
   }
@@ -95,7 +95,7 @@ export async function storeReceipt(env, decoded, merchant, kind, couponCode) {
   if (!res.ok) {
     const errorText = await res.text();
     if (res.status === 409 || /duplicate|already exists|resource exists/i.test(errorText)) {
-      throw new Error("该小票已提交过，不能重复使用。");
+      throw new Error("该消费凭证已提交过，不能重复使用。");
     }
     throw new Error("小票照片上传失败，请重试。");
   }

@@ -32,6 +32,10 @@ function publicCoupon(coupon) {
   };
 }
 
+function proofType(value) {
+  return value === "paper" ? "paper" : "screen";
+}
+
 async function loadCoupon(env, code) {
   const normalized = String(code || "").trim().toUpperCase();
   if (!normalized) throw new Error("请扫码或输入券码。");
@@ -80,6 +84,7 @@ async function issue(env, request, body) {
   let savedReceipt;
   try {
     savedReceipt = await storeReceipt(env, receipt, merchant, "issue", result.coupon.code);
+    savedReceipt.proofType = proofType(body.proofType);
     await supabase(env, `coupons?code=eq.${encodeURIComponent(result.coupon.code)}`, {
       method: "PATCH",
       body: JSON.stringify({ note: JSON.stringify({ issueReceipt: savedReceipt, receiptConsentAt: new Date().toISOString() }), issued_amount: 0 })
@@ -105,6 +110,7 @@ async function redeem(env, request, body) {
   if (statusOf(coupon) !== "unused") throw new Error("该券已使用或已过期，不能核销。");
   const receipt = await assertUniqueReceipt(env, body.receipt);
   const savedReceipt = await storeReceipt(env, receipt, merchant, "redeem", coupon.code);
+  savedReceipt.proofType = proofType(body.proofType);
   const note = parseReceiptNote(coupon.note);
   const result = await supabase(env, "rpc/public_redeem_coupon", {
     method: "POST",
@@ -116,7 +122,10 @@ async function redeem(env, request, body) {
       p_note: JSON.stringify({ ...note, redeemReceipt: savedReceipt })
     })
   });
-  if (!result?.ok) throw new Error(result?.message || "核销失败。");
+  if (!result?.ok) {
+    await deleteReceipt(env, savedReceipt.path).catch(() => {});
+    throw new Error(result?.message || "核销失败。");
+  }
   return { ...result, coupon: publicCoupon(result.coupon) };
 }
 

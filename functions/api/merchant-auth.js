@@ -1,5 +1,5 @@
 import { json, readBody } from "../_shared.js";
-import { createMerchantToken, merchantAccessCode } from "../_merchant-session.js";
+import { createMerchantToken, merchantAccessCode, merchantSessionExpiresAt } from "../_merchant-session.js";
 import { supabase } from "../_shared.js";
 
 export async function onRequestPost({ request, env }) {
@@ -18,6 +18,7 @@ export async function onRequestPost({ request, env }) {
     return json({
       ok: true,
       token: await createMerchantToken(env, merchant.id),
+      expiresAt: merchantSessionExpiresAt() * 1000,
       merchant: {
         id: merchant.id,
         shop_code: merchant.shop_code,

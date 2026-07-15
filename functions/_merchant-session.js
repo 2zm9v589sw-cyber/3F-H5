@@ -48,10 +48,21 @@ export async function createMerchantToken(env, merchantId) {
   const secret = merchantSecret(env);
   const payload = stringToBase64Url(JSON.stringify({
     merchantId,
-    exp: Math.floor(Date.now() / 1000) + 12 * 60 * 60
+    exp: merchantSessionExpiresAt()
   }));
   const signature = bytesToBase64Url(await hmac(secret, payload));
   return `${payload}.${signature}`;
+}
+
+export function merchantSessionExpiresAt() {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(new Date());
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return Math.floor((Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day) + 1) - 8 * 60 * 60 * 1000) / 1000);
 }
 
 export async function verifyMerchantToken(env, token) {
