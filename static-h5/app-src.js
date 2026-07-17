@@ -171,9 +171,13 @@ function setMsg(text, type = "") {
   if (el) el.className = `alert ${type}`, el.textContent = text;
 }
 
-function couponTypeActivityHtml(data, couponTypeCode) {
+function couponTypeActivityHtml(data, couponTypeCode, requireRedeemPermission = true) {
   const type = data.couponTypes.find((item) => item.code === couponTypeCode);
-  let merchants = data.merchants.filter((merchant) => merchant.active !== false && merchant.can_redeem && hasActivityContent(merchant));
+  let merchants = data.merchants.filter((merchant) => (
+    merchant.active !== false
+    && (!requireRedeemPermission || merchant.can_redeem)
+    && hasActivityContent(merchant)
+  ));
   if (type?.redeem_scope === "guide_points") merchants = merchants.filter((merchant) => merchant.is_guide_point);
   if (type?.redeem_scope === "regular_merchants") merchants = merchants.filter((merchant) => !merchant.is_guide_point);
   if (type?.name?.includes("饮品")) merchants = merchants.filter(isBeverageMerchant);
@@ -203,7 +207,7 @@ function homeBenefitGroupsHtml(data) {
         <div class="home-benefit-title">${esc(type.name)}</div>
         <div class="home-benefit-hint">横向滑动查看</div>
       </div>
-      <div class="home-benefit-list">${couponTypeActivityHtml(data, type.code)}</div>
+      <div class="home-benefit-list">${couponTypeActivityHtml(data, type.code, false)}</div>
     </div>
   `).join("");
 }

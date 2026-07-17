@@ -124,11 +124,11 @@ async function loadConfig(env, rawFilters) {
     supabase(env, "threshold_rules?select=*&order=sort_order.asc")
   ]);
   const [issued, redeemed, metrics, archiveBatches, auditLogs] = await Promise.all([
-    rowsWithCount(env, couponQuery(filters)),
-    rowsWithCount(env, couponQuery(filters, { redeemedOnly: true })),
-    loadMetrics(env),
-    supabase(env, "coupon_archive_batches?select=id,action,coupon_count,receipt_count,created_at,restored_at,note&order=created_at.desc&limit=10"),
-    supabase(env, "admin_audit_logs?select=action,target,detail,created_at&action=neq.auth_failure&order=created_at.desc&limit=50")
+    rowsWithCount(env, couponQuery(filters)).catch(() => ({ rows: [], count: 0 })),
+    rowsWithCount(env, couponQuery(filters, { redeemedOnly: true })).catch(() => ({ rows: [], count: 0 })),
+    loadMetrics(env).catch(() => []),
+    supabase(env, "coupon_archive_batches?select=id,action,coupon_count,receipt_count,created_at,restored_at,note&order=created_at.desc&limit=10").catch(() => []),
+    supabase(env, "admin_audit_logs?select=action,target,detail,created_at&action=neq.auth_failure&order=created_at.desc&limit=50").catch(() => [])
   ]);
   const setting = settings[0];
   const merchantsWithContent = mergeActivityContents(merchants, setting);
