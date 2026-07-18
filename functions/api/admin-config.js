@@ -81,7 +81,11 @@ function nextDate(dateText) {
 }
 
 function couponQuery(filters, { redeemedOnly = false, paging = true } = {}) {
-  const parts = ["select=*", "order=issued_at.desc"];
+  const fields = [
+    "code", "coupon_type_code", "coupon_type_name", "source_label", "issued_category_key",
+    "issued_at", "status", "start_date", "end_date", "redeem_point_label", "redeemed_at", "note"
+  ].join(",");
+  const parts = [`select=${fields}`, "order=issued_at.desc"];
   if (filters.keyword) {
     const value = encodeURIComponent(`*${filters.keyword.replace(/[,*()]/g, " ")}*`);
     parts.push(`or=(code.ilike.${value},source_label.ilike.${value},redeem_point_label.ilike.${value},coupon_type_name.ilike.${value})`);
@@ -90,6 +94,7 @@ function couponQuery(filters, { redeemedOnly = false, paging = true } = {}) {
   if (filters.from) parts.push(`issued_at=gte.${encodeURIComponent(`${filters.from}T00:00:00+08:00`)}`);
   if (filters.to) parts.push(`issued_at=lt.${encodeURIComponent(`${nextDate(filters.to)}T00:00:00+08:00`)}`);
   if (redeemedOnly || filters.status === "used") parts.push("status=eq.used");
+  if (!redeemedOnly && filters.status === "all") parts.push("status=not.is.null");
   if (!redeemedOnly && filters.status === "unused") parts.push(`status=eq.unused&end_date=gte.${shanghaiDate()}`);
   if (!redeemedOnly && filters.status === "expired") parts.push(`or=(status.eq.expired,and(status.eq.unused,end_date.lt.${shanghaiDate()}))`);
   if (paging) {
@@ -123,9 +128,7 @@ async function loadConfig(env, rawFilters) {
     supabase(env, "coupon_types?select=*&order=sort_order.asc"),
     supabase(env, "threshold_rules?select=*&order=sort_order.asc")
   ]);
-  const [issued, redeemed, metrics, archiveBatches, auditLogs] = await Promise.all([
-    rowsWithCount(env, couponQuery(filters)).catch(() => ({ rows: [], count: 0 })),
-    rowsWithCount(env, couponQuery(filters, { redeemedOnly: true })).catch(() => ({ rows: [], count: 0 })),
+  const [metrics, archiveBatches, auditLogs] = await Promise.all([
     loadMetrics(env).catch(() => []),
     supabase(env, "coupon_archive_batches?select=id,action,coupon_count,receipt_count,created_at,restored_at,note&order=created_at.desc&limit=10").catch(() => []),
     supabase(env, "admin_audit_logs?select=action,target,detail,created_at&action=neq.auth_failure&order=created_at.desc&limit=50").catch(() => [])
@@ -140,9 +143,9 @@ async function loadConfig(env, rawFilters) {
     }))),
     couponTypes,
     thresholdRules,
-    coupons: issued.rows.map(presentCoupon),
-    redeemedCoupons: redeemed.rows.map(presentCoupon),
-    pagination: { page: filters.page, pageSize: filters.pageSize, issuedTotal: issued.count, redeemedTotal: redeemed.count },
+    coupons: [],
+    redeemedCoupons: [],
+    pagination: { page: filters.page, pageSize: filters.pageSize, issuedTotal: 0, redeemedTotal: 0 },
     metrics,
     archiveBatches,
     auditLogs

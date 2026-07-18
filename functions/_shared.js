@@ -102,22 +102,36 @@ export async function supabaseWithMeta(env, path, init = {}) {
   const url = env.SUPABASE_URL;
   const key = env.SUPABASE_SERVICE_ROLE_KEY;
   if (!url || !key) throw new Error("云端数据库环境变量未配置。");
-  const res = await fetch(`${url}/rest/v1/${path}`, {
-    ...init,
-    headers: {
-      apikey: key,
-      Authorization: `Bearer ${key}`,
-      "Content-Type": "application/json",
-      ...(init.headers || {})
+  let lastError;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const res = await fetch(`${url}/rest/v1/${path}`, {
+        ...init,
+        headers: {
+          apikey: key,
+          Authorization: `Bearer ${key}`,
+          "Content-Type": "application/json",
+          ...(init.headers || {})
+        }
+      });
+      const text = await res.text();
+      if (!res.ok) {
+        const error = new Error(text || `Supabase 请求失败：${res.status}`);
+        error.retryable = res.status >= 500;
+        throw error;
+      }
+      return {
+        data: text ? JSON.parse(text) : null,
+        count: Number((res.headers.get("Content-Range") || "").split("/")[1]) || 0,
+        headers: res.headers
+      };
+    } catch (error) {
+      lastError = error;
+      if (attempt >= 2 || (!error.retryable && !(error instanceof TypeError))) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 350 * (attempt + 1)));
     }
-  });
-  const text = await res.text();
-  if (!res.ok) throw new Error(text || `Supabase 请求失败：${res.status}`);
-  return {
-    data: text ? JSON.parse(text) : null,
-    count: Number((res.headers.get("Content-Range") || "").split("/")[1]) || 0,
-    headers: res.headers
-  };
+  }
+  throw lastError || new Error("云端数据库请求失败。");
 }
 
 export function parseActivityContents(setting) {

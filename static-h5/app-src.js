@@ -565,7 +565,10 @@ async function adminCall(action, data) {
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const res = await fetch(action === "exportCoupons" ? "/api/admin-export" : "/api/admin-config", {
+      const endpoint = action === "exportCoupons"
+        ? "/api/admin-export"
+        : action === "loadCouponRecords" ? "/api/admin-records" : "/api/admin-config";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password: adminPassword, action, data })
@@ -612,10 +615,65 @@ async function renderAdmin() {
   if (adminPassword) await loadAdmin();
 }
 
+async function loadAllRecordsForStatus(status) {
+  const first = await adminCall("loadCouponRecords", {
+    mode: "issued",
+    filters: { ...adminFilters, status, page: 1, pageSize: 100 }
+  });
+  const rows = [...first.coupons];
+  const pages = Math.min(50, Math.ceil(first.total / first.pageSize));
+  for (let page = 2; page <= pages; page += 1) {
+    const next = await adminCall("loadCouponRecords", {
+      mode: "issued",
+      filters: { ...adminFilters, status, page, pageSize: 100 }
+    });
+    rows.push(...next.coupons);
+  }
+  return { rows, total: first.total };
+}
+
+async function loadAdminRecords() {
+  if (adminFilters.status !== "all") {
+    const [issued, redeemed] = await Promise.all([
+      adminCall("loadCouponRecords", { mode: "issued", filters: adminFilters }),
+      adminCall("loadCouponRecords", { mode: "redeemed", filters: adminFilters })
+    ]);
+    return { issued, redeemed };
+  }
+
+  const [unused, expired, used] = await Promise.all([
+    loadAllRecordsForStatus("unused"),
+    loadAllRecordsForStatus("expired"),
+    loadAllRecordsForStatus("used")
+  ]);
+  const start = (adminFilters.page - 1) * adminFilters.pageSize;
+  const end = start + adminFilters.pageSize;
+  const allRows = [...unused.rows, ...expired.rows, ...used.rows]
+    .sort((a, b) => String(b.issued_at || "").localeCompare(String(a.issued_at || "")));
+  const redeemedRows = [...used.rows]
+    .sort((a, b) => String(b.issued_at || "").localeCompare(String(a.issued_at || "")));
+  return {
+    issued: { coupons: allRows.slice(start, end), total: unused.total + expired.total + used.total, page: adminFilters.page, pageSize: adminFilters.pageSize },
+    redeemed: { coupons: redeemedRows.slice(start, end), total: used.total, page: adminFilters.page, pageSize: adminFilters.pageSize }
+  };
+}
+
 async function loadAdmin() {
   document.getElementById("msg").style.display = "block";
   try {
-    adminData = await adminCall("get", { filters: adminFilters });
+    const config = await adminCall("get", { filters: adminFilters });
+    const { issued, redeemed } = await loadAdminRecords();
+    adminData = {
+      ...config,
+      coupons: issued.coupons,
+      redeemedCoupons: redeemed.coupons,
+      pagination: {
+        page: issued.page,
+        pageSize: issued.pageSize,
+        issuedTotal: issued.total,
+        redeemedTotal: redeemed.total
+      }
+    };
     setMsg("后台已加载。", "ok");
     drawAdmin();
   } catch (err) {
