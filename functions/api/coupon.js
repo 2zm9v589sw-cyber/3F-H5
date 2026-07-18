@@ -36,6 +36,18 @@ function proofType(value) {
   return value === "paper" ? "paper" : "screen";
 }
 
+function issueReceiptFromFingerprint(fingerprint, merchant, requestedProofType) {
+  return {
+    path: fingerprint.storage_path,
+    contentHash: fingerprint.content_hash,
+    perceptualHash: fingerprint.perceptual_hash,
+    merchantId: merchant.id,
+    merchantLabel: `${merchant.shop_code}｜${merchant.name}`,
+    capturedAt: fingerprint.created_at,
+    proofType: proofType(requestedProofType)
+  };
+}
+
 function isBeverageMerchant(merchant) {
   return /餐饮|饮品|甜品|茶|咖啡|水吧/.test(`${merchant?.category_name || ""}${merchant?.name || ""}`);
 }
@@ -60,6 +72,36 @@ async function loadCoupon(env, code) {
   const rows = await supabase(env, `coupons?select=*&code=eq.${encodeURIComponent(normalized)}&limit=1`);
   if (!rows[0]) throw new Error("未找到该券码。");
   return rows[0];
+}
+
+async function linkIssueReceipt(env, coupon, savedReceipt, receiptConsentAt = new Date().toISOString()) {
+  const current = await loadCoupon(env, coupon.code);
+  const note = parseReceiptNote(current.note);
+  if (note.issueReceipt?.path === savedReceipt.path) return current;
+  const rows = await supabase(env, `coupons?code=eq.${encodeURIComponent(coupon.code)}`, {
+    method: "PATCH",
+    headers: { Prefer: "return=representation" },
+    body: JSON.stringify({
+      note: JSON.stringify({ ...note, issueReceipt: savedReceipt, receiptConsentAt }),
+      issued_amount: 0
+    })
+  });
+  if (!rows?.[0]) throw new Error("消费凭证与券码关联失败，请重试。");
+  return rows[0];
+}
+
+async function recoverIssueReceiptLink(env, coupon, receipt, merchant, requestedProofType) {
+  const rows = await supabase(env, [
+    "receipt_fingerprints?select=*",
+    `content_hash=eq.${receipt.contentHash}`,
+    `coupon_code=eq.${encodeURIComponent(coupon.code)}`,
+    "receipt_kind=eq.issue",
+    `merchant_id=eq.${encodeURIComponent(merchant.id)}`,
+    "limit=1"
+  ].join("&"));
+  if (!rows[0]) return null;
+  const savedReceipt = issueReceiptFromFingerprint(rows[0], merchant, requestedProofType);
+  return linkIssueReceipt(env, coupon, savedReceipt, rows[0].created_at);
 }
 
 async function merchantFromRequest(env, request) {
@@ -93,7 +135,15 @@ async function issue(env, request, body) {
       const existing = await loadCoupon(env, err.existingCouponCode).catch(() => null);
       const issuedRecently = existing?.issued_at && Date.now() - new Date(existing.issued_at).getTime() < 5 * 60 * 1000;
       if (existing?.source_merchant_id === merchant.id && statusOf(existing) === "unused" && issuedRecently) {
-        return { ok: true, coupon: publicCoupon(existing), reusedAfterRetry: true };
+        const existingNote = parseReceiptNote(existing.note);
+        if (existingNote.issueReceipt?.path) {
+          return { ok: true, coupon: publicCoupon(existing), reusedAfterRetry: true };
+        }
+        const identified = await identifyReceipt(body.receipt);
+        const recovered = await recoverIssueReceiptLink(env, existing, identified, merchant, body.proofType);
+        if (recovered) {
+          return { ok: true, coupon: publicCoupon(recovered), reusedAfterRetry: true, receiptLinkRecovered: true };
+        }
       }
     }
     throw err;
@@ -116,10 +166,7 @@ async function issue(env, request, body) {
     savedReceipt = await storeReceipt(env, receipt, merchant, "issue", result.coupon.code);
     savedReceipt.proofType = proofType(body.proofType);
     await registerReceiptFingerprint(env, receipt, savedReceipt, result.coupon.code, "issue", merchant.id);
-    await supabase(env, `coupons?code=eq.${encodeURIComponent(result.coupon.code)}`, {
-      method: "PATCH",
-      body: JSON.stringify({ note: JSON.stringify({ issueReceipt: savedReceipt, receiptConsentAt: new Date().toISOString() }), issued_amount: 0 })
-    });
+    await linkIssueReceipt(env, result.coupon, savedReceipt);
   } catch (err) {
     if (savedReceipt?.path) await deleteReceiptFingerprint(env, savedReceipt.path).catch(() => {});
     if (savedReceipt?.path) await deleteReceipt(env, savedReceipt.path).catch(() => {});
