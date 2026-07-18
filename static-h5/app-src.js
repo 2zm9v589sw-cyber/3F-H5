@@ -505,7 +505,7 @@ async function adminCall(action, data) {
   let lastErr = null;
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
-      const res = await fetch("/api/admin-config", {
+      const res = await fetch(action === "exportCoupons" ? "/api/admin-export" : "/api/admin-config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ password: adminPassword, action, data })
