@@ -537,7 +537,8 @@ async function renderRedeem() {
   if (!merchantProfile?.can_redeem) return layout("商户核销", "当前商户没有核销权限", `<section class="panel"><div class="alert bad">${esc(merchantProfile?.shop_code)}｜${esc(merchantProfile?.name)} 未开通核销权限。</div></section>`);
   layout("商户核销", "扫码顾客券面二维码并拍摄消费凭证后核销", `
     <section class="panel">
-      <div class="section-title"><h2>商户核销</h2><button id="scanBtn" class="primary">打开扫码</button></div>
+      <div class="section-title"><h2>商户核销</h2><div><button id="scanBtn" class="primary">打开扫码</button><button id="scanPhotoBtn">拍照识别</button></div></div>
+      <input id="qrPhotoInput" type="file" accept="image/*" style="display:none" />
       <video id="video" class="scanner" playsinline muted style="display:none"></video>
       <div class="grid">
         <div class="col-6"><label>券码</label><input id="code" value="${esc(params().get("code") || "")}" placeholder="扫码自动带入，手输备用" /></div>
@@ -555,6 +556,8 @@ async function renderRedeem() {
     <section id="couponInfo" class="panel" style="display:none"></section>
   `);
   document.getElementById("scanBtn").onclick = startScan;
+  document.getElementById("scanPhotoBtn").onclick = () => document.getElementById("qrPhotoInput").click();
+  document.getElementById("qrPhotoInput").onchange = scanQrPhoto;
   document.getElementById("checkBtn").onclick = checkCoupon;
   document.getElementById("redeemBtn").onclick = redeemCoupon;
   bindReceiptInput("redeem");
@@ -1053,32 +1056,42 @@ async function startScan() {
     scanBtn.disabled = false;
     setMsg("摄像头已打开，请将顾客券二维码放入画面中央。", "ok");
 
-    const detector = "BarcodeDetector" in window ? new BarcodeDetector({ formats: ["qr_code"] }) : null;
+    let detector = null;
+    if ("BarcodeDetector" in window) {
+      try {
+        const supported = typeof BarcodeDetector.getSupportedFormats === "function"
+          ? await BarcodeDetector.getSupportedFormats()
+          : ["qr_code"];
+        if (supported.includes("qr_code")) detector = new BarcodeDetector({ formats: ["qr_code"] });
+      } catch {}
+    }
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     const resolveCode = async (raw) => {
       if (!raw) return;
       stopScan();
-      let code = raw;
-      try {
-        const url = new URL(raw, location.href);
-        code = url.searchParams.get("code") || raw;
-      } catch {}
-      document.getElementById("code").value = code;
+      document.getElementById("code").value = couponCodeFromScan(raw);
       await checkCoupon();
     };
-    const tick = async () => {
+    let lastScanAt = 0;
+    const tick = async (timestamp = 0) => {
       if (!stream) return;
+      if (timestamp - lastScanAt < 120) {
+        scanFrame = requestAnimationFrame(tick);
+        return;
+      }
+      lastScanAt = timestamp;
       if (video.readyState >= 2) {
         if (detector) {
           const codes = await detector.detect(video).catch(() => []);
           if (codes.length) return resolveCode(codes[0].rawValue || "");
         } else if (ctx && video.videoWidth && video.videoHeight) {
-          canvas.width = video.videoWidth;
-          canvas.height = video.videoHeight;
+          const scale = Math.min(1, 640 / video.videoWidth);
+          canvas.width = Math.max(1, Math.round(video.videoWidth * scale));
+          canvas.height = Math.max(1, Math.round(video.videoHeight * scale));
           ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
           const image = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const found = jsQR(image.data, image.width, image.height, { inversionAttempts: "dontInvert" });
+          const found = jsQR(image.data, image.width, image.height, { inversionAttempts: "attemptBoth" });
           if (found?.data) return resolveCode(found.data);
         }
       }
@@ -1088,7 +1101,62 @@ async function startScan() {
   } catch (err) {
     stopScan();
     scanBtn.disabled = false;
-    setMsg("无法打开摄像头。请在微信/浏览器权限里允许摄像头，或用手机相机扫描顾客二维码打开核销链接，也可以手输券码。", "bad");
+    const hint = err?.name === "NotAllowedError"
+      ? "摄像头权限未允许，请在微信/浏览器设置中开启。"
+      : err?.name === "NotReadableError" ? "摄像头可能正被其他应用占用，请关闭后重试。" : "当前浏览器无法打开摄像头。";
+    setMsg(`${hint}可改用“拍照识别”或手输券码。`, "bad");
+  }
+}
+
+function couponCodeFromScan(raw) {
+  const value = String(raw || "").trim();
+  try {
+    const url = new URL(value, location.href);
+    return (url.searchParams.get("code") || value).trim();
+  } catch {
+    return value;
+  }
+}
+
+async function scanQrPhoto(event) {
+  const input = event.currentTarget;
+  const file = input.files?.[0];
+  if (!file) return;
+  document.getElementById("msg").style.display = "block";
+  setMsg("正在识别二维码...");
+  let image;
+  let objectUrl = "";
+  try {
+    if (typeof createImageBitmap === "function") {
+      image = await createImageBitmap(file);
+    } else {
+      objectUrl = URL.createObjectURL(file);
+      image = new Image();
+      image.src = objectUrl;
+      await new Promise((resolve, reject) => {
+        image.onload = resolve;
+        image.onerror = reject;
+      });
+    }
+    const sourceWidth = image.width || image.naturalWidth;
+    const sourceHeight = image.height || image.naturalHeight;
+    const scale = Math.min(1, 1600 / Math.max(sourceWidth, sourceHeight));
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(sourceWidth * scale));
+    canvas.height = Math.max(1, Math.round(sourceHeight * scale));
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const found = jsQR(pixels.data, pixels.width, pixels.height, { inversionAttempts: "attemptBoth" });
+    if (!found?.data) throw new Error("未识别到券二维码，请保持画面清晰完整后重试。");
+    document.getElementById("code").value = couponCodeFromScan(found.data);
+    await checkCoupon();
+  } catch (err) {
+    setMsg(err.message || "二维码识别失败，请重试。", "bad");
+  } finally {
+    if (typeof image?.close === "function") image.close();
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    input.value = "";
   }
 }
 
