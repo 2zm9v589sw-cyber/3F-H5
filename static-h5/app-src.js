@@ -32,7 +32,12 @@ const role = () => params().get("role") || (params().get("code") ? "coupon" : "h
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (s) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[s]));
 const money = (v) => Number(v || 0).toFixed(2).replace(/\.00$/, "");
 const sumMoney = (rows, key) => rows.reduce((sum, row) => sum + Number(row[key] || 0), 0);
-const proofTypeLabel = (value) => value === "paper" ? "纸质小票" : value === "screen" ? "电脑/平板订单" : "历史凭证";
+const proofTypeLabel = (value, hasReceipt = true) => {
+  if (!hasReceipt) return "无";
+  if (value === "paper") return "纸质小票";
+  if (value === "screen") return "电脑/平板订单";
+  return "消费凭证";
+};
 const activityText = (merchant) => merchant?.activity_content?.trim() || "该品牌活动内容待后台维护。";
 const hasActivityContent = (merchant) => Boolean(merchant?.activity_content?.trim());
 const isBeverageMerchant = (merchant) => /餐饮|饮品|甜品|茶|咖啡|水吧/.test(`${merchant?.category_name || ""}${merchant?.name || ""}`);
@@ -660,14 +665,14 @@ function drawAdmin() {
         <section class="admin-panel coupons">
           <div class="section-title"><h2>商户发券记录</h2><span class="muted">共 ${pagination.issuedTotal} 张｜本页 ${issuedCoupons.length} 张</span></div>
           <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券商户</th><th>消费类别</th><th>发券时间</th><th>凭证类型</th><th>凭证</th><th>状态</th><th>操作</th></tr></thead><tbody>
-            ${issuedCoupons.map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.issued_category_key || "")}</td><td>${esc(c.issued_at || "")}</td><td>${esc(proofTypeLabel(c.issue_proof_type))}</td><td>${c.issue_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.issue_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.computedStatus)}</td><td>${c.computedStatus === "unused" ? `<button class="voidCouponBtn orange" data-code="${esc(c.code)}">作废</button>` : ""}</td></tr>`).join("")}
+            ${issuedCoupons.map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.issued_category_key || "")}</td><td>${esc(c.issued_at || "")}</td><td>${esc(proofTypeLabel(c.issue_proof_type, Boolean(c.issue_receipt_path)))}</td><td>${c.issue_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.issue_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.computedStatus)}</td><td>${c.computedStatus === "unused" ? `<button class="voidCouponBtn orange" data-code="${esc(c.code)}">作废</button>` : ""}</td></tr>`).join("")}
           </tbody></table></div>
         </section>
 
         <section class="admin-panel coupons">
           <div class="section-title"><h2>商户核销记录</h2><span class="muted">共 ${pagination.redeemedTotal} 张｜本页 ${redeemedCoupons.length} 张</span></div>
           <div class="table-wrap"><table><thead><tr><th>券码</th><th>券类型</th><th>发券来源</th><th>核销点位</th><th>核销时间</th><th>凭证类型</th><th>凭证</th><th>备注</th></tr></thead><tbody>
-            ${redeemedCoupons.map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.redeem_point_label || "")}</td><td>${esc(c.redeemed_at || "")}</td><td>${esc(proofTypeLabel(c.redeem_proof_type))}</td><td>${c.redeem_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.redeem_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.note_text || "")}</td></tr>`).join("")}
+            ${redeemedCoupons.map((c) => `<tr><td>${esc(c.code)}</td><td>${esc(c.coupon_type_name)}</td><td>${esc(c.source_label)}</td><td>${esc(c.redeem_point_label || "")}</td><td>${esc(c.redeemed_at || "")}</td><td>${esc(proofTypeLabel(c.redeem_proof_type, Boolean(c.redeem_receipt_path)))}</td><td>${c.redeem_receipt_path ? `<button class="receiptBtn" data-path="${esc(c.redeem_receipt_path)}">查看</button>` : "无"}</td><td>${esc(c.note_text || "")}</td></tr>`).join("")}
           </tbody></table></div>
         </section>
       </div>
@@ -774,7 +779,7 @@ async function exportAdminCsv() {
   try {
   const result = await adminCall("exportCoupons", { filters: adminFilters });
   const headers = ["券码", "券类型", "发券商户", "发券消费类别", "发券时间", "发券凭证类型", "发券凭证留存", "券状态", "有效期", "核销点位", "核销时间", "核销凭证类型", "核销凭证留存", "备注"];
-  const rows = result.coupons.map((c) => [c.code, c.coupon_type_name, c.source_label, c.issued_category_key, c.issued_at, proofTypeLabel(c.issue_proof_type), c.issue_receipt_path ? "是" : "否", c.computedStatus, `${c.start_date}至${c.end_date}`, c.redeem_point_label, c.redeemed_at, proofTypeLabel(c.redeem_proof_type), c.redeem_receipt_path ? "是" : "否", c.note_text]);
+  const rows = result.coupons.map((c) => [c.code, c.coupon_type_name, c.source_label, c.issued_category_key, c.issued_at, proofTypeLabel(c.issue_proof_type, Boolean(c.issue_receipt_path)), c.issue_receipt_path ? "是" : "否", c.computedStatus, `${c.start_date}至${c.end_date}`, c.redeem_point_label, c.redeemed_at, proofTypeLabel(c.redeem_proof_type, Boolean(c.redeem_receipt_path)), c.redeem_receipt_path ? "是" : "否", c.note_text]);
   const csv = [headers, ...rows].map((row) => row.map((v) => `"${String(v ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   const link = document.createElement("a");
   link.href = URL.createObjectURL(new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" }));
