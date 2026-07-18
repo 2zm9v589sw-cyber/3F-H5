@@ -175,6 +175,15 @@ async function audit(env, action, target = "", detail = {}) {
   });
 }
 
+function merchantNameFromLabel(value) {
+  const parts = String(value || "").split(/\s*[|｜]\s*/).filter(Boolean);
+  return (parts.length > 1 ? parts.at(-1) : parts[0] || "").trim();
+}
+
+function merchantNamesFromCoupons(rows) {
+  return [...new Set(rows.map((row) => merchantNameFromLabel(row.source_label)).filter(Boolean))];
+}
+
 async function saveConfig(env, body) {
   const { setting, merchants = [], couponTypes = [], thresholdRules = [] } = body;
   await supabase(env, "activity_settings?id=eq.main", {
@@ -211,7 +220,12 @@ async function saveConfig(env, body) {
   await upsert(env, "threshold_rules", thresholdRules.map((rule, idx) => ({
     ...rule, min_amount: Number(rule.min_amount || 0), sort_order: Number(rule.sort_order ?? idx), active: Boolean(rule.active), updated_at: new Date().toISOString()
   })));
-  await audit(env, "save_config", "activity", { merchants: merchants.length, couponTypes: couponTypes.length, thresholdRules: thresholdRules.length });
+  await audit(env, "save_config", "activity", {
+    merchants: merchants.length,
+    couponTypes: couponTypes.length,
+    thresholdRules: thresholdRules.length,
+    merchantNames: merchants.map((merchant) => merchant.name).filter(Boolean)
+  });
 }
 
 function receiptPaths(rows) {
@@ -271,7 +285,12 @@ async function deleteCouponRows(env, rows, action, { archive = false } = {}) {
     });
     deleted += chunk.length;
   }
-  await audit(env, action, batch?.id || "coupons", { deleted, deletedFiles, batchId: batch?.id || null });
+  await audit(env, action, batch?.id || "coupons", {
+    deleted,
+    deletedFiles,
+    batchId: batch?.id || null,
+    merchantNames: merchantNamesFromCoupons(rows)
+  });
   return { deleted, deletedFiles, batchId: batch?.id || null };
 }
 
@@ -388,7 +407,11 @@ async function restoreBatch(env, body) {
   await supabase(env, `coupon_archive_batches?id=eq.${encodeURIComponent(body.batchId)}`, {
     method: "PATCH", body: JSON.stringify({ restored_at: new Date().toISOString() })
   });
-  await audit(env, "restore_coupon_batch", body.batchId, { restored: archives.length, receiptImagesRestored: false });
+  await audit(env, "restore_coupon_batch", body.batchId, {
+    restored: archives.length,
+    receiptImagesRestored: false,
+    merchantNames: merchantNamesFromCoupons(archives.map((item) => item.coupon_data))
+  });
   return { restored: archives.length };
 }
 
@@ -406,15 +429,20 @@ async function voidCoupon(env, code) {
       note: JSON.stringify({ ...note, voidedAt: new Date().toISOString(), voidReason: "后台手动作废" })
     })
   });
-  await audit(env, "void_coupon", normalized, { updated: rows?.length || 0 });
+  await audit(env, "void_coupon", normalized, {
+    updated: rows?.length || 0,
+    merchantName: merchantNameFromLabel(current[0].source_label)
+  });
   return { updated: rows?.length || 0 };
 }
 
 async function deleteMerchant(env, id) {
   const normalized = String(id || "").trim();
   if (!normalized) throw Object.assign(new Error("缺少商户 ID，无法删除。"), { statusCode: 400 });
+  const current = await supabase(env, `merchants?select=id,name&id=eq.${encodeURIComponent(normalized)}&limit=1`);
   const rows = await supabase(env, `merchants?id=eq.${encodeURIComponent(normalized)}`, { method: "DELETE" });
-  await audit(env, "delete_merchant", normalized, { deleted: rows?.length || 0 });
+  const merchantName = current[0]?.name || "已删除商户";
+  await audit(env, "delete_merchant", merchantName, { deleted: rows?.length || 0, merchantName });
   return { deleted: rows?.length || 0 };
 }
 
@@ -428,7 +456,11 @@ async function exportCoupons(env, rawFilters) {
     if (page.length < 1000) break;
     if (rows.length >= 20000) throw new Error("当前筛选结果超过 20000 条，请缩小日期范围后导出。");
   }
-  await audit(env, "export_coupons", "filtered", { count: rows.length, filters });
+  await audit(env, "export_coupons", "filtered", {
+    count: rows.length,
+    filters,
+    merchantNames: merchantNamesFromCoupons(rows)
+  });
   return { coupons: rows.map(presentCoupon), filters };
 }
 

@@ -44,6 +44,60 @@ const couponStatusLabel = (value) => {
   if (value === "unused") return "未使用";
   return value || "未知";
 };
+const auditActionLabel = (value) => ({
+  save_config: "保存后台配置",
+  clear_test_coupons: "清除测试券",
+  cleanup_audit_coupons: "清理检测数据",
+  clear_all_coupons: "清空全部券数据",
+  restore_coupon_batch: "恢复归档券数据",
+  void_coupon: "作废电子券",
+  delete_merchant: "删除商户",
+  export_coupons: "导出券数据"
+}[value] || "其他后台操作");
+const merchantNameFromLabel = (value) => {
+  const parts = String(value || "").split(/\s*[|｜]\s*/).filter(Boolean);
+  return (parts.length > 1 ? parts.at(-1) : parts[0] || "").trim();
+};
+const auditMerchantNames = (log, data) => {
+  const detail = log.detail || {};
+  if (Array.isArray(detail.merchantNames) && detail.merchantNames.length) return [...new Set(detail.merchantNames.filter(Boolean))];
+  if (detail.merchantName) return [detail.merchantName];
+  if (log.action === "save_config") return [...new Set((data.merchants || []).map((item) => item.name).filter(Boolean))];
+  if (log.action === "export_coupons") {
+    return [...new Set((data.coupons || []).map((item) => merchantNameFromLabel(item.source_label)).filter(Boolean))];
+  }
+  const merchant = (data.merchants || []).find((item) => item.id === log.target);
+  if (merchant?.name) return [merchant.name];
+  if (log.action === "void_coupon") {
+    const coupon = [...(data.coupons || []), ...(data.redeemedCoupons || [])].find((item) => item.code === log.target);
+    const name = merchantNameFromLabel(coupon?.source_label);
+    if (name) return [name];
+  }
+  return [];
+};
+const auditTargetLabel = (log, data) => {
+  const names = auditMerchantNames(log, data);
+  if (names.length === 1) return names[0];
+  if (names.length > 1) return `${names.slice(0, 3).join("、")}${names.length > 3 ? `等${names.length}家商户` : ""}`;
+  if (log.action === "save_config") return "全部商户及活动配置";
+  if (log.action === "clear_test_coupons" || log.action === "cleanup_audit_coupons") return "测试数据涉及商户";
+  if (log.action === "clear_all_coupons") return "全部商户";
+  if (log.action === "restore_coupon_batch") return "归档券涉及商户";
+  if (log.action === "export_coupons") return "当前筛选范围商户";
+  if (log.action === "delete_merchant") return "已删除商户（历史记录）";
+  return "系统数据";
+};
+const auditDetailLabel = (log) => {
+  const detail = log.detail || {};
+  if (log.action === "save_config") return `已保存${Number(detail.merchants || 0)}家商户、${Number(detail.couponTypes || 0)}种券类型、${Number(detail.thresholdRules || 0)}项赠券条件`;
+  if (["clear_test_coupons", "cleanup_audit_coupons", "clear_all_coupons"].includes(log.action)) return `已删除${Number(detail.deleted || 0)}张券，清理${Number(detail.deletedFiles || 0)}张凭证图片`;
+  if (log.action === "restore_coupon_batch") return `已恢复${Number(detail.restored || 0)}张券，凭证图片不恢复`;
+  if (log.action === "void_coupon") return `已作废${Number(detail.updated || 0)}张券`;
+  if (log.action === "delete_merchant") return Number(detail.deleted || 0) > 0 ? "商户已删除" : "未找到可删除的商户";
+  if (log.action === "export_coupons") return `已导出${Number(detail.count || 0)}条券数据`;
+  return "操作已完成";
+};
+const chinaDateTime = (value) => value ? new Date(value).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }) : "";
 const activityText = (merchant) => merchant?.activity_content?.trim() || "该品牌活动内容待后台维护。";
 const hasActivityContent = (merchant) => Boolean(merchant?.activity_content?.trim());
 const isBeverageMerchant = (merchant) => /餐饮|饮品|甜品|茶|咖啡|水吧/.test(`${merchant?.category_name || ""}${merchant?.name || ""}`);
@@ -686,9 +740,9 @@ function drawAdmin() {
         <div class="pagination"><button id="prevCouponPage" ${pagination.page <= 1 ? "disabled" : ""}>上一页</button><strong>第 ${pagination.page} / ${totalPages} 页</strong><button id="nextCouponPage" ${pagination.page >= totalPages ? "disabled" : ""}>下一页</button></div>
       </section>
       <section class="admin-panel admin-full">
-        <div class="section-title"><h2>后台操作审计</h2><span class="muted">最近 ${(d.auditLogs || []).length} 条</span></div>
-        <div class="table-wrap"><table><thead><tr><th>时间</th><th>操作</th><th>对象</th><th>结果摘要</th></tr></thead><tbody>
-          ${(d.auditLogs || []).map((log) => `<tr><td>${esc(log.created_at)}</td><td>${esc(log.action)}</td><td>${esc(log.target || "")}</td><td>${esc(JSON.stringify(log.detail || {}))}</td></tr>`).join("")}
+        <div class="section-title"><h2>后台操作记录</h2><span class="muted">最近 ${(d.auditLogs || []).length} 条</span></div>
+        <div class="table-wrap"><table><thead><tr><th>操作时间</th><th>操作类型</th><th>涉及商户</th><th>操作结果</th></tr></thead><tbody>
+          ${(d.auditLogs || []).map((log) => `<tr><td>${esc(chinaDateTime(log.created_at))}</td><td>${esc(auditActionLabel(log.action))}</td><td>${esc(auditTargetLabel(log, d))}</td><td>${esc(auditDetailLabel(log))}</td></tr>`).join("")}
         </tbody></table></div>
       </section>
     </div>

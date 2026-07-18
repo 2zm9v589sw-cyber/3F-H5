@@ -67,6 +67,25 @@ function present(coupon) {
   };
 }
 
+function merchantNames(rows) {
+  return [...new Set(rows.map((row) => {
+    const parts = String(row.source_label || "").split(/\s*[|｜]\s*/).filter(Boolean);
+    return (parts.length > 1 ? parts.at(-1) : parts[0] || "").trim();
+  }).filter(Boolean))];
+}
+
+async function recordExport(env, rows, filters) {
+  await supabase(env, "admin_audit_logs", {
+    method: "POST",
+    headers: { Prefer: "return=minimal" },
+    body: JSON.stringify({
+      action: "export_coupons",
+      target: "filtered",
+      detail: { count: rows.length, filters, merchantNames: merchantNames(rows) }
+    })
+  });
+}
+
 export async function onRequestPost({ request, env }) {
   try {
     const body = await readBody(request);
@@ -79,6 +98,7 @@ export async function onRequestPost({ request, env }) {
       if (page.length < 1000) break;
     }
     if (rows.length >= 20000) throw new Error("当前筛选结果达到20000条，请缩小日期范围后导出。");
+    await recordExport(env, rows, filters).catch(() => {});
     return json({ ok: true, data: { coupons: rows.map(present), filters } });
   } catch (err) {
     return json({ ok: false, message: err.message || "导出数据失败。" }, err.statusCode || 400);
